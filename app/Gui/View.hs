@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 -- | The main window: a virtualized, sortable list of installed apps with
 -- multi-select, bulk uninstall and upgrade, rule-based selection, disk and
 -- kind filters, and a live operation queue.
@@ -53,7 +54,13 @@ data ViewCache = ViewCache
   }
 
 newViewCache :: IO ViewCache
-newViewCache = ViewCache <$> newIORef Nothing <*> newIORef Nothing <*> newIORef Nothing <*> newIORef Nothing <*> newIORef False
+newViewCache = do
+  vcVisible <- newIORef Nothing
+  vcDisks <- newIORef Nothing
+  vcListWid <- newIORef Nothing
+  vcDialog <- newIORef Nothing
+  vcPopupOpen <- newIORef False
+  pure ViewCache {..}
 
 data RowAction
   = RowToggle !Int !Bool
@@ -333,37 +340,65 @@ appView env cache = do
 
   -- Confirmation for single and bulk operations
   let verb kind = if kind == OpUpgrade then "Upgrade" else "Uninstall"
-  (confirmResp, confirmAct) <- modal (isJust pending) (maybe "" (\pb -> verb (pbKind pb) <> " apps") pending) $
-    forM pending $ \pb -> columnWith (gap 10 . minW 620 . dialogBody) $ do
+      countApps count = tshow count <> (if count == 1 then " app" else " apps")
+      confirmTitle pb = verb (pbKind pb) <> " " <> countApps (length (pbPackages pb))
+  (confirmResp, confirmAct) <- modal (isJust pending) (maybe "" confirmTitle pending) $
+    forM pending $ \pb -> columnWith (gap 16 . minW 660 . dialogBody) $ do
       let pkgs = pbPackages pb
-          count = length pkgs
+          upgrading = pbKind pb == OpUpgrade
           noUninstaller = length (filter ((== NoUninstall) . pkgUninstall) pkgs)
-      labelWith (tight . fontColor (palText pal)) (verb (pbKind pb) <> " " <> tshow count <> (if count == 1 then " app:" else " apps:"))
-      scrollWith (tight . fillW . maxH 220) $ columnWith (gap 2 . tight) $
-        forM_ (zip [0 :: Int ..] pkgs) $ \(i, p) ->
-          withKey i $ labelWith (tight . fontColor (palTextMuted pal)) ("• " <> ellipsize 70 (pkgName p) <> "   " <> pkgVersion p)
-      when (pbKind pb == OpUninstall && noUninstaller > 0) $
-        labelWith (tight . fontColor (palYellow pal)) $
-          tshow noUninstaller <> " of these have no registered uninstall command and may fail."
-      rowWith (gap 10 . alignMid . tight) $ do
-        labelWith (tight . fixedW 120 . fontColor (palTextMuted pal)) "Installer UI"
-        m <- selectWith (fixedW 240) ["Silent (unattended)", "Installer default", "Interactive"] modeIx
-        when (m /= modeIx) (setModeIx m)
-      rowWith (gap 10 . alignMid . tight) $ do
-        labelWith (tight . fixedW 120 . fontColor (palTextMuted pal)) "Run at once"
-        k <- selectWith (fixedW 240) ["1 (recommended)", "2", "4"] parallelIx
-        when (k /= parallelIx) (setParallelIx k)
-      f <- checkbox "Force: skip WinGet's safety checks" force
-      when (f /= force) (setForce f)
-      when (pbKind pb == OpUpgrade) $ do
-        a <- checkbox "Accept package license agreements" acceptAgreements
-        when (a /= acceptAgreements) (setAcceptAgreements a)
+          tone = if upgrading then palGreen pal else palRed pal
+          shownVersion p = if pkgVersion p == "Unknown" then "—" else pkgVersion p
+          -- Spacers rather than padding: nano-ui fills padded containers.
+          -- Sizes are multiples of 4, as in 'detailsBody'.
+          inset = spacer (Fixed 16) Fit
+          optionRow title control = rowWith (fillW . gap 16 . alignMid . tight) $ do
+            labelWith (tight . fixedW 130 . alignMid . fontColor (palTextMuted pal)) title
+            control
+          appRows = columnWith (fillW . gap 0 . tight) $ do
+            spacer Fit (Fixed 8)
+            forM_ (zip [0 :: Int ..] pkgs) $ \(i, p) ->
+              withKey i $ rowWith (fillW . fixedH 36 . gap 0 . alignMid . tight) $ do
+                inset
+                labelWith (tight . alignMid . fontColor (palText pal)) (ellipsize 46 (pkgName p))
+                flex
+                spacer (Fixed 16) Fit
+                labelWith (tight . alignMid . fontSize 15 . fontColor (palTextMuted pal)) (ellipsize 22 (shownVersion p))
+                inset
+            spacer Fit (Fixed 8)
+      labelWith (tight . fontColor (palTextMuted pal)) $
+        if upgrading
+          then "These apps will be updated to their newest available versions."
+          else "These apps will be removed from this PC."
+      -- Only a long list scrolls (about six and a half rows show), so a short
+      -- one has no scrollbar.
+      panelStyledWith (palBackground pal) (palBorder pal) (fillW . tight) $
+        if length pkgs > 6 then scrollWith (fillW . fixedH 244 . tight) appRows else appRows
+      when (not upgrading && noUninstaller > 0) $
+        panelStyledWith (lerpColor (palSurface pal) (palYellow pal) 0.10) (lerpColor (palSurface pal) (palYellow pal) 0.40) (fillW . tight) $
+          rowWith (fillW . fixedH 44 . gap 0 . alignMid . tight) $ do
+            inset
+            labelWith (tight . alignMid . fontColor (palYellow pal)) $
+              tshow noUninstaller <> (if noUninstaller == 1 then " app has" else " apps have") <> " no registered uninstall command and may fail."
+      columnWith (fillW . gap 12 . tight) $ do
+        optionRow "Installer UI" $ do
+          m <- selectWith (fixedW 260) ["Silent (unattended)", "Installer default", "Interactive"] modeIx
+          when (m /= modeIx) (setModeIx m)
+        optionRow "Run at once" $ do
+          k <- selectWith (fixedW 260) ["1 (recommended)", "2", "4"] parallelIx
+          when (k /= parallelIx) (setParallelIx k)
+        optionRow "" $ columnWith (gap 4 . tight) $ do
+          f <- checkbox "Force" force
+          when (f /= force) (setForce f)
+          labelWith (tight . fontSize 15 . fontColor (palTextFaint pal)) "Skip WinGet's safety checks, such as for apps that are still running."
+        when upgrading $ optionRow "" $ do
+          a <- checkbox "Accept package license agreements" acceptAgreements
+          when (a /= acceptAgreements) (setAcceptAgreements a)
       separator
-      rowWith (fillW . gap 8 . tight) $ do
+      rowWith (fillW . gap 12 . alignMid . tight) $ do
         flex
         cancel <- button "Cancel"
-        let tone = if pbKind pb == OpUpgrade then palGreen pal else palRed pal
-        go <- buttonWith (fontSemiBold . fontColor tone) (verb (pbKind pb) <> " " <> tshow count)
+        go <- filledButton tone (confirmTitle pb)
         pure (cancel, go)
   when (respClicked confirmResp) (setPending Nothing)
   case (pending, join confirmAct) of
@@ -383,18 +418,21 @@ appView env cache = do
 
   -- Rule-based selection, shared with winget-gui-cli --from FILE
   let matches = if rulesOpen then selectPackages (parseSelectors rulesText) (stPackages st) else V.empty
-  (rulesResp, rulesAct) <- modal rulesOpen "Select by rule" $ columnWith (gap 8 . minW 860 . dialogBody) $ do
-    labelWith (tight . fontColor (palTextMuted pal)) "One rule per line: id:ID, name:NAME, publisher:NAME, disk:D:, match:TEXT, or a bare id or name."
-    labelWith (tight . fontColor (palTextMuted pal)) "Lines starting with # are ignored. The same files work with winget-gui-cli --from."
-    t <- textAreaWith (fillW . fixedH 220) rulesText
+  (rulesResp, rulesAct) <- modal rulesOpen "Select by rule" $ columnWith (gap 16 . minW 860 . dialogBody) $ do
+    columnWith (fillW . gap 4 . tight) $ do
+      labelWith (tight . fontColor (palTextMuted pal)) "One rule per line: id:ID, name:NAME, publisher:NAME, disk:D:, match:TEXT, or a bare id or name."
+      labelWith (tight . fontSize 15 . fontColor (palTextFaint pal)) "Lines starting with # are ignored. The same files work with winget-gui-cli --from."
+    t <- textAreaWith (fillW . fixedH 240) rulesText
     when (t /= rulesText) (setRulesText t)
-    labelWith (tight . fontColor (palText pal)) (tshow (V.length matches) <> " installed apps match")
-    rowWith (fillW . gap 8 . tight) $ do
+    separator
+    rowWith (fillW . gap 12 . alignMid . tight) $ do
       load <- button "Load file…"
       save <- button "Save rules…"
       flex
+      labelWith (tight . alignMid . fontColor (if V.null matches then palTextMuted pal else palText pal)) (tshow (V.length matches) <> " installed apps match")
+      spacer (Fixed 8) Fit
       add <- button "Add to selection"
-      replace <- buttonWith (fontSemiBold . fontColor (palAccent pal)) "Select matches"
+      replace <- filledButton (palAccent pal) "Select matches"
       pure (load, save, add, replace)
   when (respClicked rulesResp) (setRulesOpen False)
   forM_ rulesAct $ \(load, save, add, replace) -> do
@@ -478,41 +516,64 @@ packageRow ix isSelected isBusy p =
 data DetailAction = DetailCopyId | DetailOpenLocation | DetailUninstall | DetailUpgrade
 
 detailsBody :: Package -> NanoUI (Maybe DetailAction)
-detailsBody p = columnWith (gap 6 . minW 680 . dialogBody) $ do
+detailsBody p = columnWith (gap 12 . minW 720 . dialogBody) $ do
   let pal = palette
       orDash t = if T.null t then "—" else t
       joined = orDash . T.intercalate ", "
-  kv "Id" (pkgId p)
-  kv "Version" (orDash (pkgVersion p))
-  unless (T.null (pkgAvailable p)) $ kv "Available" (pkgAvailable p)
-  kv "Publisher" (orDash (pkgPublisher p))
-  kv "Source" (orDash (pkgSource p))
-  kv "Kind" $ case pkgKind p of
-    KindWin32 -> "Desktop installer"
-    KindMsix -> "MSIX / Store package"
-    KindCatalog -> "WinGet catalog package"
-  kv "Scope" (orDash (pkgScope p))
-  kv "Installer" (orDash (pkgInstaller p))
-  kv "Architecture" (orDash (pkgArch p))
-  kv "Disk" (if T.null (pkgDrive p) then "Unknown" else pkgDrive p)
-  kv "Installed" (orDash (pkgDate p))
-  kv "Size" (orDash (formatSize (pkgSize p)))
-  kv "Uninstall" $ case pkgUninstall p of
-    HasSilentUninstall -> "Silent uninstall supported"
-    HasUninstall -> "Uninstaller registered"
-    NoUninstall -> "No uninstall command registered"
-  kv "Product codes" (joined (pkgProductCodes p))
-  kv "Package family" (joined (pkgFamilies p))
-  rowWith (fillW . gap 12 . alignMid . tight) $ do
-    labelWith (tight . fontMuted . minW 88) "Location"
-    selectableTextWith (tight . fontMono . fontColor (palText pal)) (orDash (pkgLocation p))
+      -- Spacers rather than padding: nano-ui fills padded containers.
+      -- Fixed sizes here are multiples of 4, which land on whole device pixels
+      -- at every 25% display scale. Off-grid sizes (30 at 125%) lay out a
+      -- little taller than the dialog measured them, so it would scroll.
+      inset = spacer (Fixed 16) Fit
+      sectionTitle title = labelWith (tight . fontSize 15 . fontSemiBold . fontColor (palTextFaint pal)) title
+      section title fields = columnWith (fillW . gap 8 . tight) $ do
+        sectionTitle title
+        panelStyledWith (palBackground pal) (palBorder pal) (fillW . tight) $
+          columnWith (fillW . gap 0 . tight) $ do
+            spacer Fit (Fixed 4)
+            void fields
+            spacer Fit (Fixed 4)
+      field title value = rowWith (fillW . fixedH 32 . gap 0 . alignMid . tight) $ do
+        inset
+        labelWith (tight . fixedW 150 . alignMid . fontColor (palTextMuted pal)) title
+        labelWith (tight . alignMid . fontColor (palText pal)) (ellipsize 58 value)
+        inset
+  section "App" $ do
+    field "Id" (pkgId p)
+    field "Version" (orDash (pkgVersion p))
+    unless (T.null (pkgAvailable p)) $ field "Available" (pkgAvailable p)
+    field "Publisher" (orDash (pkgPublisher p))
+    field "Source" (orDash (pkgSource p))
+    field "Kind" $ case pkgKind p of
+      KindWin32 -> "Desktop installer"
+      KindMsix -> "MSIX / Store package"
+      KindCatalog -> "WinGet catalog package"
+    field "Scope" (orDash (pkgScope p))
+    field "Installer" (orDash (pkgInstaller p))
+    field "Architecture" (orDash (pkgArch p))
+  section "Storage" $ do
+    field "Disk" (if T.null (pkgDrive p) then "Unknown" else pkgDrive p)
+    field "Size" (orDash (formatSize (pkgSize p)))
+    field "Installed" (orDash (pkgDate p))
+    rowWith (fillW . fixedH 32 . gap 0 . alignMid . tight) $ do
+      inset
+      labelWith (tight . fixedW 150 . alignMid . fontColor (palTextMuted pal)) "Location"
+      selectableTextWith (tight . alignMid . fontMono . fontSize 15 . fontColor (palText pal)) (orDash (pkgLocation p))
+      inset
+  section "Uninstall" $ do
+    field "Support" $ case pkgUninstall p of
+      HasSilentUninstall -> "Silent uninstall supported"
+      HasUninstall -> "Uninstaller registered"
+      NoUninstall -> "No uninstall command registered"
+    field "Product codes" (joined (pkgProductCodes p))
+    field "Package family" (joined (pkgFamilies p))
   separator
-  rowWith (fillW . gap 8 . tight) $ do
+  rowWith (fillW . gap 12 . alignMid . tight) $ do
     copy <- button "Copy id"
     open <- if T.null (pkgLocation p) then pure False else button "Open location"
     flex
-    up <- if T.null (pkgAvailable p) then pure False else buttonWith (fontColor (palGreen pal)) "Upgrade"
-    un <- buttonWith (fontColor (palRed pal)) "Uninstall"
+    up <- if T.null (pkgAvailable p) then pure False else filledButton (palGreen pal) "Upgrade"
+    un <- filledButton (palRed pal) "Uninstall"
     pure $ case () of
       _
         | copy -> Just DetailCopyId

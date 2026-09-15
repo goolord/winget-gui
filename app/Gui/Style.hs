@@ -1,5 +1,5 @@
 -- | The app's palette and nano-ui theme, plus the few widgets nano-ui has no
--- style for: flat column headers and pill badges.
+-- style for: flat column headers, pill badges, and filled action buttons.
 module Gui.Style
   ( Palette (..)
   , palette
@@ -7,6 +7,7 @@ module Gui.Style
   , HeaderAlign (..)
   , headerCell
   , badge
+  , filledButton
   , cellInset
   , cellPad
   , cellPadEnd
@@ -26,9 +27,9 @@ data Palette = Palette
   , palStripe :: !Color
   -- ^ Every other list row.
   , palSurface :: !Color
-  -- ^ Raised chrome: top bar, header, queue.
+  -- ^ Raised chrome: top bar, header, queue, dialogs.
   , palElevated :: !Color
-  -- ^ Buttons and dialogs.
+  -- ^ Buttons.
   , palHover :: !Color
   , palPressed :: !Color
   , palBorder :: !Color
@@ -76,7 +77,10 @@ appTheme =
   Theme
     { themeWindow = palBackground p
     , themePanel = style (palSurface p) (palBorder p) (palHover p) (palPressed p) 4
-    , themeFloatingWindow = style (palElevated p) (palBorder p) (palElevated p) (palElevated p) 12
+    , -- Dialogs and drop-downs use the panel surface too: nano-ui fills padded
+      -- containers with the panel colour, which would otherwise show as a box
+      -- inside the dialog.
+      themeFloatingWindow = style (palSurface p) (palBorder p) (palSurface p) (palSurface p) 12
     , themeButton = style (palElevated p) (palBorder p) (palHover p) (palPressed p) 7
     , themeInput = style (palBackground p) (palBorder p) (palStripe p) (palBackground p) 7
     , themeSeparator = palSeparator p
@@ -162,3 +166,25 @@ badge color txt =
             drawRoundedRect r 14 (lerpColor (palSurface palette) color 0.16)
             drawText (V2 (rectX r + rectW r / 2) (rectY r + rectH r / 2)) AlignCenter AlignMiddle txt color
         }
+
+-- | A dialog's main action: filled with @color@, dark text, lighter on hover
+-- and darker while pressed. As tall as a nano-ui button (1.3 line heights;
+-- nano-ui's button padding is a total, not per side) so it lines up with the
+-- buttons beside it, with a little more room on the sides.
+filledButton :: Color -> Text -> NanoUI Bool
+filledButton color txt = do
+  (resp, ()) <-
+    customWidget
+      defaultCustomWidgetSpec
+        { widgetLayout = alignMid defaultLayout
+        , widgetMeasure = Just (\fm _ -> (lineWidth fm txt + 4 * fmAdvance fm ' ', fmLineHeight fm * 1.3))
+        , widgetDraw = \dc r -> runCanvas $ do
+            let fill
+                  | cdcPressed dc = lerpColor color (palBackground palette) 0.25
+                  | cdcHovered dc = lerpColor color (palText palette) 0.18
+                  | otherwise = color
+            drawRoundedRect r 7 fill
+            drawText (V2 (rectX r + rectW r / 2) (rectY r + rectH r / 2)) AlignCenter AlignMiddle txt (palBackground palette)
+        , widgetCursor = Just (const UiCursorPointer)
+        }
+  pure (respClicked resp)
