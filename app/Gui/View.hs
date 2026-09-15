@@ -75,6 +75,13 @@ actionW = 196
 rowMinW :: Float
 rowMinW = 2 * 14 + 22 + 220 + publisherW + versionW + sizeColW + dateW + actionW + 6 * 10
 
+-- | Top padding for the two-line name block. Its line boxes leave more room
+-- under the smaller id line than above the name, so a box-centred block reads
+-- about 4px high next to single-line cells (measured at the 18px UI font).
+-- Top padding shifts the block's text down by the full amount.
+nameBlockNudge :: Layout -> Layout
+nameBlockNudge layout = layout {layoutPadding = (layoutPadding layout) {padT = 4}}
+
 -- | Known drives in order, then apps whose drive could not be determined.
 diskStats :: Vector Package -> [DiskStat]
 diskStats pkgs =
@@ -195,10 +202,16 @@ appView env cache = do
           spacer (Fixed 8) Fit
           q <- rowWith (tight . fixedW 320) (searchField "Search name, id, or publisher" query)
           when (q /= query) (setQuery q)
-          f <- selectWith (fixedW 200) (map filterLabel [minBound .. maxBound]) (fromEnum filt)
+          fm <- uiFontMetrics
+          -- Size each drop-down to its longest option (plus insets and the arrow),
+          -- so no option runs past the menu at any font size.
+          let fitOptions options = fixedW (max 160 (maximum (0 : map (lineWidth fm) options) + 56))
+              kindOptions = map filterLabel [minBound .. maxBound]
+              diskOptions = "All disks" : map diskLabel disks
+          f <- selectWith (fitOptions kindOptions) kindOptions (fromEnum filt)
           when (f /= fromEnum filt) (setFilt (toEnum f))
           let diskIx = maybe 0 (\d -> maybe 0 (+ 1) (findIndex ((== d) . dsDrive) disks)) disk
-          k <- selectWith (fixedW 310) ("All disks" : map diskLabel disks) diskIx
+          k <- selectWith (fitOptions diskOptions) diskOptions diskIx
           when (k /= diskIx) $
             setDiskChoice (if k == 0 then Nothing else dsDrive <$> listToMaybe (drop (k - 1) disks))
           flex
@@ -432,7 +445,7 @@ packageRow ix isSelected isBusy p =
   panelStyledWith background background (fillW . fixedH rowH . tight) $
     rowWith (fillW . fixedH rowH . gap 10 . alignMid . padXY 14 0 . tight) $ do
       toggled <- rowWith (alignMid . tight) (checkbox "" isSelected)
-      columnWith (grow . minW 220 . gap 3 . alignMid . cellPad . tight) $ do
+      columnWith (grow . minW 220 . gap 3 . alignMid . nameBlockNudge . cellPad . tight) $ do
         labelWith (tight . fontMedium . fontColor (palText pal)) (ellipsize 64 (pkgName p))
         labelWith (tight . fontSize 14 . fontColor (palTextFaint pal)) (ellipsize 72 (pkgId p))
       rowWith (fixedW publisherW . alignMid . cellPad . tight) $
