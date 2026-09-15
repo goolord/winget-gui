@@ -96,8 +96,9 @@ data AppState = AppState
   -- ^ Selected package ids; ids survive refreshes, indices do not.
   , stJobs :: !(Vector JobView)
   , stActiveBatches :: !Int
-  , stStopRequested :: !Bool
   , stSkipped :: !(Set Word64)
+  -- ^ Tokens of jobs the user skipped, cancelled, or stopped. A job is
+  -- checked against this set as it is about to start.
   }
 
 data Env = Env
@@ -123,7 +124,6 @@ newEnv =
         , stSelected = Set.empty
         , stJobs = V.empty
         , stActiveBatches = 0
-        , stStopRequested = False
         , stSkipped = Set.empty
         }
     <*> newIORef (pure ())
@@ -140,7 +140,11 @@ modifyState env f = atomicModifyIORef' (envState env) (\s -> (f s, ())) >> notif
 -- | Connect and show installed apps as fast as the local catalog allows; then,
 -- if asked, correlate with the configured sources to fill in available upgrades.
 startupLoad :: Env -> Bool -> IO ()
-startupLoad env checkUpdates = void . forkIO $ do
+startupLoad env checkUpdates = void . forkIO $ connectAndLoad env checkUpdates
+
+connectAndLoad :: Env -> Bool -> IO ()
+connectAndLoad env checkUpdates = do
+  modifyState env (\s -> s {stLoading = Just "Connecting to WinGet…", stError = Nothing})
   connected <- initBridge
   case connected of
     Left err ->
@@ -150,12 +154,14 @@ startupLoad env checkUpdates = void . forkIO $ do
       loadOnce env False
       when checkUpdates (loadOnce env True)
 
--- | Reload in the background unless a load is already running.
+-- | Reload in the background unless a load is already running. If WinGet
+-- could not be reached before, connect again first.
 refresh :: Env -> Bool -> IO ()
 refresh env checkUpdates = do
   claimed <- atomicModifyIORef' (envState env) $ \s ->
-    if isJust (stLoading s) || not (stConnected s) then (s, False) else (s {stLoading = Just "Refreshing…"}, True)
-  when claimed . void . forkIO $ loadOnce env checkUpdates
+    if isJust (stLoading s) then (s, Nothing) else (s {stLoading = Just "Refreshing…"}, Just (stConnected s))
+  forM_ claimed $ \connected ->
+    void . forkIO $ if connected then loadOnce env checkUpdates else connectAndLoad env checkUpdates
 
 loadOnce :: Env -> Bool -> IO ()
 loadOnce env checkUpdates = do
@@ -204,10 +210,7 @@ startBatch env kind flags workers requested = do
             resolved = mapMaybe (\p -> Map.lookup (pkgId p) current) requested
          in if null resolved
               then (s, Nothing)
-              else
-                ( s {stActiveBatches = stActiveBatches s + 1, stStopRequested = False}
-                , Just (snap, resolved)
-                )
+              else (s {stActiveBatches = stActiveBatches s + 1}, Just (snap, resolved))
   forM_ claimed $ \(snap, pkgs) -> do
     jobs <- mapM (newJob kind flags) pkgs
     modifyState env $ \s ->
@@ -216,7 +219,7 @@ startBatch env kind flags workers requested = do
         , stSelected = foldr (Set.delete . pkgId) (stSelected s) pkgs
         }
     void . forkIO $ do
-      let skip job = (\s -> stStopRequested s || Set.member (jobToken job) (stSkipped s)) <$> readState env
+      let skip job = Set.member (jobToken job) . stSkipped <$> readState env
       runJobs workers snap skip (report env) jobs
       (release, recheck) <- atomicModifyIORef' (envState env) $ \s ->
         let n = stActiveBatches s - 1
@@ -243,13 +246,17 @@ report env job status = modifyState env $ \s ->
            in s1 {stPackages = V.map upgraded (stPackages s1), stRevision = stRevision s1 + 1}
         _ -> s1
 
--- | Skip every job not yet started and cancel the running ones.
+-- | Stop every job currently queued or running. Each job is marked skipped
+-- individually, so batches queued afterwards run normally while these stay
+-- stopped. Cancellation is requested for all of them: the bridge cancels a
+-- running operation now and one that is just starting as soon as it registers.
 stopBatches :: Env -> IO ()
 stopBatches env = do
-  running <- atomicModifyIORef' (envState env) $ \s ->
-    (s {stStopRequested = True}, [jvJob jv | jv <- V.toList (stJobs s), jobIsActive (jvStatus jv)])
+  open <- atomicModifyIORef' (envState env) $ \s ->
+    let jobs = [jvJob jv | jv <- V.toList (stJobs s), not (jobIsFinished (jvStatus jv))]
+     in (s {stSkipped = foldr (Set.insert . jobToken) (stSkipped s) jobs}, jobs)
   notify env
-  forM_ running $ \job -> forkIO (void (cancelOperation (jobToken job)))
+  void . forkIO $ forM_ open (void . cancelOperation . jobToken)
 
 -- | Cancel one job: skip it if waiting, or ask WinGet to cancel it if running.
 cancelJob :: Env -> Job -> IO ()
@@ -257,15 +264,15 @@ cancelJob env job = do
   modifyState env (\s -> s {stSkipped = Set.insert (jobToken job) (stSkipped s)})
   void . forkIO . void $ cancelOperation (jobToken job)
 
--- | Re-queue failed and cancelled jobs with their original options.
+-- | Re-queue failed jobs with their original options. Jobs the user skipped or
+-- cancelled stay as they are.
 retryFailed :: Env -> IO ()
 retryFailed env = do
   failed <- atomicModifyIORef' (envState env) $ \s ->
-    let isRetry jv = case jvStatus jv of
+    let isFailed jv = case jvStatus jv of
           JobFailed _ -> True
-          JobCancelled -> True
           _ -> False
-        (retry, keep) = V.partition isRetry (stJobs s)
+        (retry, keep) = V.partition isFailed (stJobs s)
      in (s {stJobs = keep}, map jvJob (V.toList retry))
   let byOp = Map.fromListWith (flip (<>)) [((jobKind j == OpUpgrade, show (jobFlags j)), [j]) | j <- failed]
   forM_ (Map.elems byOp) $ \case

@@ -7,7 +7,7 @@ mod com;
 
 use bindings::Microsoft::Management::Deployment::*;
 use core::ffi::c_void;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use windows_collections::IVectorView;
 use windows_core::{Error, HRESULT, HSTRING, Result};
@@ -30,6 +30,7 @@ const STATE_FINISHED: u32 = 3;
 
 const E_UNEXPECTED: HRESULT = HRESULT(0x8000FFFF_u32 as i32);
 const E_INVALIDARG: HRESULT = HRESULT(0x80070057_u32 as i32);
+const E_ABORT: HRESULT = HRESULT(0x80004004_u32 as i32);
 
 pub type ProgressCb = Option<unsafe extern "C" fn(user: *mut c_void, state: u32, fraction: f64)>;
 
@@ -44,7 +45,21 @@ type Cancel = Arc<dyn Fn() + Send + Sync>;
 
 static MANAGER: OnceLock<Agile<PackageManager>> = OnceLock::new();
 static SNAPSHOTS: Mutex<Option<(u64, HashMap<u64, Snapshot>)>> = Mutex::new(None);
-static RUNNING: Mutex<Option<HashMap<u64, Cancel>>> = Mutex::new(None);
+/// Cancellable operations, and cancellations requested for tokens whose
+/// operation has not registered yet. One lock covers both, so a request cannot
+/// slip in between an operation checking for it and registering itself.
+#[derive(Default)]
+struct Ops {
+    running: HashMap<u64, Cancel>,
+    requested: HashSet<u64>,
+}
+
+static OPS: Mutex<Option<Ops>> = Mutex::new(None);
+
+/// Consumes a cancellation requested before the operation started.
+fn take_cancel_request(token: u64) -> bool {
+    lock(&OPS).as_mut().is_some_and(|ops| ops.requested.remove(&token))
+}
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -428,15 +443,24 @@ struct Running {
 
 impl Running {
     fn new(token: u64, reporter: Reporter, cancel: Cancel) -> Self {
-        lock(&RUNNING).get_or_insert_with(HashMap::new).insert(token, cancel);
+        let requested = {
+            let mut guard = lock(&OPS);
+            let ops = guard.get_or_insert_with(Ops::default);
+            ops.running.insert(token, cancel.clone());
+            ops.requested.remove(&token)
+        };
+        // Cancelled while starting: cancel now, outside the lock.
+        if requested {
+            cancel();
+        }
         Running { token, reporter }
     }
 }
 
 impl Drop for Running {
     fn drop(&mut self) {
-        if let Some(map) = lock(&RUNNING).as_mut() {
-            map.remove(&self.token);
+        if let Some(ops) = lock(&OPS).as_mut() {
+            ops.running.remove(&self.token);
         }
         *lock(&self.reporter.0) = None;
     }
@@ -463,6 +487,9 @@ fn install_mode(flags: u32) -> PackageInstallMode {
 }
 
 fn uninstall(snapshot: u64, index: u32, flags: u32, token: u64, reporter: Reporter) -> Result<OpOutcome> {
+    if take_cancel_request(token) {
+        return Err(Error::from(E_ABORT));
+    }
     let package = package_at(snapshot, index)?;
     let options: UninstallOptions = com::create(&com::CLSID_UNINSTALL_OPTIONS)?;
     options.SetPackageUninstallMode(uninstall_mode(flags))?;
@@ -494,6 +521,9 @@ fn uninstall(snapshot: u64, index: u32, flags: u32, token: u64, reporter: Report
 }
 
 fn upgrade(snapshot: u64, index: u32, flags: u32, token: u64, reporter: Reporter) -> Result<OpOutcome> {
+    if take_cancel_request(token) {
+        return Err(Error::from(E_ABORT));
+    }
     let package = package_at(snapshot, index)?;
     let options: InstallOptions = com::create(&com::CLSID_INSTALL_OPTIONS)?;
     options.SetPackageInstallMode(install_mode(flags))?;
@@ -578,8 +608,17 @@ pub unsafe extern "C" fn wg_upgrade(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn wg_cancel(token: u64) -> u8 {
-    // Clone the handle out so the cross-process Cancel runs without the lock.
-    let cancel = lock(&RUNNING).as_ref().and_then(|m| m.get(&token)).cloned();
+    // A token that is not running yet is remembered and cancelled as it starts.
+    let cancel = {
+        let mut guard = lock(&OPS);
+        let ops = guard.get_or_insert_with(Ops::default);
+        let running = ops.running.get(&token).cloned();
+        if running.is_none() {
+            ops.requested.insert(token);
+        }
+        running
+    };
+    // Cancel runs without the lock: it calls into WinGet.
     match cancel {
         Some(cancel) => {
             cancel();
@@ -614,5 +653,22 @@ pub extern "C" fn wg_activation_mode() -> u32 {
 pub unsafe extern "C" fn wg_free(ptr: *mut u8, len: usize) {
     if !ptr.is_null() {
         unsafe { drop(Box::from_raw(core::ptr::slice_from_raw_parts_mut(ptr, len))) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancel_before_start_aborts_without_reaching_winget() {
+        let token = 0x00C0_FFEE;
+        // Not running yet: the request is remembered.
+        assert_eq!(wg_cancel(token), 0);
+        let aborted = uninstall(u64::MAX, 0, 0, token, Reporter::new(None, core::ptr::null_mut()));
+        assert_eq!(aborted.err().map(|e| e.code()), Some(E_ABORT));
+        // The request is consumed: the next attempt gets as far as the snapshot lookup.
+        let missing = uninstall(u64::MAX, 0, 0, token, Reporter::new(None, core::ptr::null_mut()));
+        assert_eq!(missing.err().map(|e| e.code()), Some(E_INVALIDARG));
     }
 }

@@ -184,6 +184,16 @@ selfTestSteps opts env cache dir = do
     press KeyEnd
     replicateM_ (T.length "2C-Audio") (press KeyBackspace)
     expectGone " of "
+    -- Escape that closes a drop-down must not also clear the selection.
+    click "Select shown"
+    expect "selected"
+    click "All disks"
+    expect "Unknown disk"
+    press KeyEscape
+    expectGone "Unknown disk"
+    expect "selected"
+    click "Clear"
+    expectGone "selected"
     click "All disks"
     expect "Unknown disk"
     shot "07-disks"

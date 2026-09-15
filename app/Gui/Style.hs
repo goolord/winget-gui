@@ -58,9 +58,9 @@ palette =
     , palPressed = rgb 29 30 32
     , palBorder = rgb 54 56 60
     , palSeparator = rgb 38 40 43
-    , palText = rgb 234 234 231
-    , palTextMuted = rgb 158 160 161
-    , palTextFaint = rgb 112 114 116
+    , palText = rgb 240 240 237
+    , palTextMuted = rgb 180 182 184
+    , palTextFaint = rgb 142 145 149
     , palAccent = rgb 56 196 178
     , palAccentSoft = rgb 22 52 50
     , palGreen = rgb 150 210 96
@@ -131,7 +131,7 @@ headerCell sizing align title sortState sortable = do
   (resp, ()) <-
     customWidget
       defaultCustomWidgetSpec
-        { widgetLayout = (sizing . fixedH 30 . alignMid) defaultLayout
+        { widgetLayout = (sizing . fixedH 34 . alignMid) defaultLayout
         , widgetDraw = \dc r -> runCanvas $ do
             let hovered = sortable && cdcHovered dc
                 pressed = sortable && cdcPressed dc
@@ -156,9 +156,9 @@ badge color txt =
   void $
     customWidget
       defaultCustomWidgetSpec
-        { widgetLayout = fixedH 24 defaultLayout
-        , widgetMeasure = Just (\fm _ -> (lineWidth fm txt + 20, 24))
+        { widgetLayout = fixedH 28 defaultLayout
+        , widgetMeasure = Just (\fm _ -> (lineWidth fm txt + 22, 28))
         , widgetDraw = \_ r -> runCanvas $ do
-            drawRoundedRect r 12 (lerpColor (palSurface palette) color 0.16)
+            drawRoundedRect r 14 (lerpColor (palSurface palette) color 0.16)
             drawText (V2 (rectX r + rectW r / 2) (rectY r + rectH r / 2)) AlignCenter AlignMiddle txt color
         }

@@ -2,6 +2,7 @@
 module Main (main) where
 
 import Control.Concurrent.MVar (newMVar, withMVar)
+import Control.Exception (IOException, try)
 import Control.Monad (unless, when)
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Text (Text)
@@ -112,7 +113,8 @@ confirm :: Text -> IO Bool
 confirm prompt = do
   T.putStr (prompt <> " [y/N] ")
   hFlush stdout
-  answer <- T.strip . T.toLower <$> T.getLine
+  -- No input (stdin closed or redirected) counts as "no".
+  answer <- either (const "") (T.strip . T.toLower) <$> try @IOException T.getLine
   pure (answer `elem` ["y", "yes"])
 
 main :: IO ()

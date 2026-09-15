@@ -14,8 +14,9 @@ windowOptions :: SdlOptions
 windowOptions =
   defaultSdlOptions
     { sdlWindowTitle = "Installed apps - winget-gui"
-    , sdlWindowSize = Size 1440 900
+    , sdlWindowSize = Size 1560 960
     , sdlAppTheme = Just appTheme
+    , sdlAppFontSize = 18
     }
 
 main :: IO ()

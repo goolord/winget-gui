@@ -87,7 +87,9 @@ int32_t wg_upgrade(uint64_t snapshot, uint32_t index, uint32_t flags, uint64_t t
                    wg_progress_cb cb, void *user,
                    uint32_t *out_status, uint32_t *out_installer_code, uint8_t *out_reboot);
 
-/* Requests cancellation of a running operation. Returns 1 if the token was running. */
+/* Requests cancellation of an operation. Returns 1 if the token was running
+ * and was cancelled now; otherwise the request is remembered and the
+ * operation is cancelled when it starts (it then returns E_ABORT). */
 uint8_t wg_cancel(uint64_t token);
 
 /* Human-readable message for an HRESULT, as a UTF-8 buffer. */
