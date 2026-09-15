@@ -1,0 +1,12 @@
+[package]
+name = "winget-bridge-gen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Regenerates ../src/bindings.rs from ../winmd. Run: cargo run --manifest-path bridge/gen/Cargo.toml
+[dependencies]
+windows-bindgen = "0.100"
+
+# Standalone root, so Cargo does not load the parent bridge crate's manifest.
+[workspace]

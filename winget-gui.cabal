@@ -1,0 +1,67 @@
+cabal-version:      3.4
+name:               winget-gui
+version:            0.1.0.0
+synopsis:           Fast "Add or remove programs" with bulk uninstall, on nano-ui and the WinGet COM API
+license:            MIT
+build-type:         Simple
+extra-doc-files:    README.md
+
+common shared
+    default-language: GHC2024
+    default-extensions:
+        OverloadedStrings
+        LambdaCase
+    ghc-options: -Wall -Wcompat -Wunused-packages
+
+-- The executables link bridge/target/release/winget_bridge. Build it with
+-- scripts/build.ps1, which also copies the import library to the name GHC's
+-- linker searches for. The directory is relative, so it is given per
+-- executable: a registered library may not carry relative library paths.
+common bridge-link
+    extra-lib-dirs:   bridge/target/release
+
+-- WinGet access shared by the GUI and the CLI.
+library
+    import:           shared
+    hs-source-dirs:   src
+    exposed-modules:
+        WinGet.Bridge
+        WinGet.Queue
+        WinGet.Select
+    build-depends:
+        base,
+        bytestring,
+        text,
+        vector
+    extra-libraries:  winget_bridge
+
+executable winget-gui
+    import:           shared, bridge-link
+    main-is:          Main.hs
+    hs-source-dirs:   app
+    other-modules:
+        Gui.SelfTest
+        Gui.State
+        Gui.Style
+        Gui.View
+    build-depends:
+        base,
+        containers,
+        nano-ui,
+        nano-ui-sdl,
+        process,
+        text,
+        vector,
+        winget-gui
+    ghc-options: -threaded -rtsopts "-with-rtsopts=-N2 -A64m -I0"
+
+executable winget-gui-cli
+    import:           shared, bridge-link
+    main-is:          Cli.hs
+    hs-source-dirs:   app
+    build-depends:
+        base,
+        text,
+        vector,
+        winget-gui
+    ghc-options: -threaded -rtsopts "-with-rtsopts=-N2"

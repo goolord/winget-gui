@@ -1,0 +1,26 @@
+[package]
+name = "winget-bridge"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "C ABI over the WinGet COM API (Microsoft.Management.Deployment) for the Haskell GUI"
+
+[lib]
+name = "winget_bridge"
+crate-type = ["cdylib"]
+
+[dependencies]
+windows-core = "0.100"
+windows-collections = "0.100"
+windows-future = "0.100"
+windows-reference = "0.100"
+windows-time = "0.100"
+windows-link = "0.100"
+windows-registry = "0.100"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

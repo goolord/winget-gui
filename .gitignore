@@ -1,0 +1,7 @@
+dist-newstyle/
+dist/
+bridge/target/
+bridge/gen/target/
+*.prof
+*.hp
+cabal.project.local*
