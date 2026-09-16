@@ -521,9 +521,8 @@ detailsBody p = columnWith (gap 12 . minW 720 . dialogBody) $ do
       orDash t = if T.null t then "—" else t
       joined = orDash . T.intercalate ", "
       -- Spacers rather than padding: nano-ui fills padded containers.
-      -- Fixed sizes here are multiples of 4, which land on whole device pixels
-      -- at every 25% display scale. Off-grid sizes (30 at 125%) lay out a
-      -- little taller than the dialog measured them, so it would scroll.
+      -- Fixed sizes here are multiples of 4, so they land on whole device
+      -- pixels at every 25% display scale.
       inset = spacer (Fixed 16) Fit
       sectionTitle title = labelWith (tight . fontSize 15 . fontSemiBold . fontColor (palTextFaint pal)) title
       section title fields = columnWith (fillW . gap 8 . tight) $ do

@@ -16,8 +16,10 @@ module Gui.Style
 where
 
 import Control.Monad (void, when)
+import Data.Char (ord)
 import Data.Maybe (isJust)
 import Data.Text (Text)
+import Data.Text qualified as T
 import NanoUI
 import NanoUI.Testing (UiCursorKind (..))
 
@@ -123,6 +125,18 @@ cellPad layout = layout {layoutPadding = (layoutPadding layout) {padL = cellInse
 cellPadEnd :: Layout -> Layout
 cellPadEnd layout = layout {layoutPadding = (layoutPadding layout) {padR = cellInset}}
 
+-- | A 'widgetContent' key for a drawing that reads text and colours as well as
+-- numbers. nano-ui skips both the rebuild and the repaint of a custom widget
+-- whose key, size and interaction state are unchanged, so a key must cover
+-- everything its drawing reads: a stale key draws stale pixels. nano-ui's
+-- 'contentKey' hashes the numbers; 'mix64' folds in the colours and the text.
+drawKey :: Text -> [Color] -> [Float] -> Int
+drawKey txt colors numbers =
+  let seed = fromIntegral (contentKey numbers)
+      withColors = foldl' (\acc c -> mix64 acc (fromIntegral (colorToWord32 c))) seed colors
+      key = fromIntegral (T.foldl' (\acc ch -> mix64 acc (fromIntegral (ord ch))) withColors txt)
+   in if key == 0 then 1 else key
+
 data HeaderAlign = HeaderStart | HeaderEnd
   deriving (Eq)
 
@@ -132,10 +146,14 @@ data HeaderAlign = HeaderStart | HeaderEnd
 -- clicked.
 headerCell :: (Layout -> Layout) -> HeaderAlign -> Text -> Maybe Bool -> Bool -> NanoUI Bool
 headerCell sizing align title sortState sortable = do
+  -- Everything the drawing reads besides hover and press state.
+  let sortNum = case sortState of {Just True -> 2; Just False -> 1; Nothing -> 0}
+      flags = [sortNum, if sortable then 1 else 0, if align == HeaderEnd then 1 else 0]
   (resp, ()) <-
     customWidget
       defaultCustomWidgetSpec
         { widgetLayout = (sizing . fixedH 34 . alignMid) defaultLayout
+        , widgetContent = drawKey title [] flags
         , widgetDraw = \dc r -> runCanvas $ do
             let hovered = sortable && cdcHovered dc
                 pressed = sortable && cdcPressed dc
@@ -161,6 +179,7 @@ badge color txt =
     customWidget
       defaultCustomWidgetSpec
         { widgetLayout = fixedH 28 defaultLayout
+        , widgetContent = drawKey txt [color] []
         , widgetMeasure = Just (\fm _ -> (lineWidth fm txt + 22, 28))
         , widgetDraw = \_ r -> runCanvas $ do
             drawRoundedRect r 14 (lerpColor (palSurface palette) color 0.16)
@@ -177,6 +196,7 @@ filledButton color txt = do
     customWidget
       defaultCustomWidgetSpec
         { widgetLayout = alignMid defaultLayout
+        , widgetContent = drawKey txt [color] []
         , widgetMeasure = Just (\fm _ -> (lineWidth fm txt + 4 * fmAdvance fm ' ', fmLineHeight fm * 1.3))
         , widgetDraw = \dc r -> runCanvas $ do
             let fill

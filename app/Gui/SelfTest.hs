@@ -217,5 +217,12 @@ selfTestSteps opts env cache dir = do
     shot "06-queue"
     modifyState env (\s -> s {stJobs = V.empty})
 
+    -- The header is custom-drawn, so its caption is not in the text spans:
+    -- click the Publisher column and check the screenshot for the sort arrow.
+    step "sort column (custom widget repaint)"
+    clickPos frame base (V2 744 130)
+    settle
+    shot "09-sort"
+
     putStrLn ("selftest: passed; screenshots in " <> dir)
     exitWith ExitSuccess
