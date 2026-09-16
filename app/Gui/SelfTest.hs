@@ -141,6 +141,24 @@ selfTestSteps opts env cache dir = do
     expect "Installed apps"
     shot "01-list"
 
+    step "scrolling"
+    -- A notch is three rows, and the glide lands within the settle frames
+    -- (headless frames carry no elapsed time, so a scroll finishes at once).
+    -- The list is virtualized, so this also proves the rows it builds follow
+    -- the offset.
+    let rowTexts = fmap (map (\(_, txt, _, _, _) -> txt)) spans
+        wheel notches =
+          frame base {inputMousePos = V2 780 600, inputScroll = V2 0 notches} >> settle
+    atTop <- rowTexts
+    wheel 3
+    scrolled <- rowTexts
+    when (scrolled == atTop) $ dumpVisible >> fail "selftest: the wheel did not scroll the list"
+    shot "10-scrolled"
+    wheel (-40)
+    backAtTop <- rowTexts
+    unless (backAtTop == atTop) $
+      dumpVisible >> fail "selftest: scrolling back up did not return to the top"
+
     step "search"
     click "Search name, id, or publisher"
     frame base {inputChars = "2C-Audio"}

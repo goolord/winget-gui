@@ -26,7 +26,7 @@ import Gui.State
 import Gui.Style
 import NanoUI
 import NanoUI.Backend.Sdl (FileDialogId, FileDialogResult (..), askOpenFileDialog, askSaveFileDialog, defaultFileDialogOptions, pollFileDialogUi)
-import NanoUI.Context (Context (..), getPrevRect, getScrollOffset2D, setScrollOffset2D)
+import NanoUI.Context (Context (..))
 import NanoUI.Monad (askContext, askInput)
 import NanoUI.Store (anySelectOpen)
 import NanoUI.Testing (floatingPanelActive, getStore, textFieldActive)
@@ -49,6 +49,8 @@ data ViewCache = ViewCache
   , vcDisks :: !(IORef (Maybe (Int, [DiskStat])))
   , vcListWid :: !(IORef (Maybe WidgetId))
   , vcDialog :: !(IORef (Maybe (DialogPurpose, FileDialogId)))
+  , vcTuned :: !(IORef Bool)
+  -- ^ Whether the context has been given this app's scroll tuning yet.
   , vcPopupOpen :: !(IORef Bool)
   -- ^ Whether a drop-down or popup was on screen at the end of the last frame.
   }
@@ -59,6 +61,7 @@ newViewCache = do
   vcDisks <- newIORef Nothing
   vcListWid <- newIORef Nothing
   vcDialog <- newIORef Nothing
+  vcTuned <- newIORef False
   vcPopupOpen <- newIORef False
   pure ViewCache {..}
 
@@ -111,6 +114,13 @@ appView env cache = do
   ctx <- askContext
   inp <- askInput
   uiIO $ readIORef (ctxWakeLoop ctx) >>= mapM_ (writeIORef (envWake env))
+  -- Scrolling glides onto its target instead of jumping, everywhere in the
+  -- window. Set once: the context keeps it.
+  uiIO $ do
+    tuned <- readIORef (vcTuned cache)
+    unless tuned $ do
+      setScrollTuning ctx defaultScrollTuning {scrollSmoothTime = 0.12}
+      writeIORef (vcTuned cache) True
   st <- uiIO (readState env)
   let pal = palette
 
@@ -170,12 +180,18 @@ appView env cache = do
   when (inputKeysElem KeyDelete keys && not editing && not anyModal && not (null selectedPackages)) $
     setPending (Just (PendingBatch OpUninstall selectedPackages))
 
-  -- List geometry from the previous frame, used by the header too.
+  -- List geometry as the scroller last laid it out, used by the header too.
+  -- The viewport is what the rows actually show through: inside the padding
+  -- and clear of the scrollbars.
   mWid <- uiIO (readIORef (vcListWid cache))
-  mRect <- maybe (pure Nothing) (uiIO . getPrevRect ctx) mWid
-  off <- maybe (pure (V2 0 0)) (uiIO . getScrollOffset2D ctx) mWid
+  mMetrics <- maybe (pure Nothing) (uiIO . getScrollMetrics ctx) mWid
   let n = V.length visible
-      viewH = maybe 600 rectH mRect
+      -- A stand-in until the list has been laid out once.
+      viewport = maybe (Rect 0 0 600 600) scrollViewport mMetrics
+      off = maybe (V2 0 0) scrollOffset mMetrics
+      viewH = rectH viewport
+      -- The list's own range: a filter that just shrank it knows the new row
+      -- count a frame before the scroller measures the shorter content.
       maxOff = max 0 (fromIntegral n * rowH - viewH)
       y = min maxOff (max 0 (v2Y off))
       lo = max 0 (floor (y / rowH) - 2)
@@ -188,17 +204,16 @@ appView env cache = do
       rightInset = if fromIntegral n * rowH > viewH then scrollBarGutter ScrollBarList 0 else listInset
       -- The row under a point, if the point is on a row's text rather than
       -- its checkbox or buttons. Rows have a fixed height, so this is
-      -- arithmetic on the list's rectangle and scroll offset.
-      rowAt pos = case mRect of
-        Just r
-          | not anyModal && rectContains r pos ->
-              let i = floor ((v2Y pos - rectY r + y) / rowH)
-                  -- Content x: follows horizontal scroll in a narrow window.
-                  localX = v2X pos - rectX r + v2X off
-               in if i >= 0 && i < n && localX > checkW && localX < max (rectW r) rowMinW - actionW - 24
-                    then Just (pkgId (visible V.! i))
-                    else Nothing
-        _ -> Nothing
+      -- arithmetic on the viewport and the scroll offset.
+      rowAt pos
+        | not anyModal && isJust mMetrics && rectContains viewport pos =
+            let i = floor ((v2Y pos - rectY viewport + y) / rowH)
+                -- Content x: follows horizontal scroll in a narrow window.
+                localX = v2X pos - rectX viewport + v2X off
+             in if i >= 0 && i < n && localX > checkW && localX < max (rectW viewport) rowMinW - actionW - 24
+                  then Just (pkgId (visible V.! i))
+                  else Nothing
+        | otherwise = Nothing
 
   columnWith (fillW . fillH . gap 0 . tight) $ do
     panelStyledWith (palSurface pal) (palSurface pal) (fillW . tight) $
@@ -279,7 +294,12 @@ appView env cache = do
     separator
 
     -- Virtualized package list: only rows inside the viewport are built.
-    forM_ mWid $ \w -> when (abs (y - v2Y off) > 0.5) $ uiIO (setScrollOffset2D ctx w (V2 (v2X off) y))
+    -- A filter that shortened the list can leave the offset past the new end;
+    -- pull it back before the rows are built, and without a glide, so the
+    -- list does not slide away under the first frame of a new search.
+    forM_ mWid $ \w ->
+      when (abs (y - v2Y off) > 0.5) $
+        uiIO (scrollTo ctx w (V2 (v2X off) y) ScrollInstant)
     (wid, actions) <- withKey ("package-list" :: Text) $ scrollArea2D (fillW . fillH) $
       columnWith (fillW . gap 0 . tight) $
         if n == 0
@@ -298,7 +318,11 @@ appView env cache = do
                in withKey (pkgId p) (packageRow i (Set.member (pkgId p) selected) (Set.member (pkgId p) busy) p)
             when (hi < n - 1) $ spacer Fit (Fixed (fromIntegral (n - 1 - hi) * rowH))
             pure (concat acts)
-    uiIO (writeIORef (vcListWid cache) (Just wid))
+    uiIO $ do
+      writeIORef (vcListWid cache) (Just wid)
+      -- A notch moves the list three whole rows, the way Explorer's list does.
+      -- Everything else in the window keeps the default step.
+      setScrollStep ctx wid (3 * rowH)
 
     -- Clicking a row's text (press and release on the same row) opens details.
     when (inputMousePressed inp) $ setPressedRow (rowAt (inputMousePos inp))
