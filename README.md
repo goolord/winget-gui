@@ -5,6 +5,8 @@ remove programs"), built on [nano-ui](https://github.com/goolord/nano-ui) and
 the [WinGet](https://github.com/microsoft/winget-cli) COM API, with bulk and
 automated uninstallation.
 
+<img width="1562" height="1002" alt="image" src="https://github.com/user-attachments/assets/4ebdc144-bd0b-419e-a92f-b2d5d78332eb" />
+
 - **Fast**: the installed list appears as soon as WinGet's local catalog is
   read, and upgrade information is filled in afterwards in the background.
   Records are built on all cores. The list is virtualized, so only the rows on
@@ -18,6 +20,7 @@ automated uninstallation.
   | `winget-gui-cli list` (installed apps, sizes, dates) | 1.7 s |
   | `winget-gui-cli list --updates` (plus available upgrades) | 5.8 s |
   | `winget list` | 6.2 s |
+  | windows settings | ~16.5 s | 
 - **Bulk operations**: check any number of apps (click, Shift+click ranges,
   Ctrl+A, "Select shown") and uninstall or upgrade them in one go, silently or
   interactively, one at a time or several in parallel, with a live queue you
