@@ -17,6 +17,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, catch, displayException, fromException)
 import Control.Monad (replicateM_, unless, void, when)
 import Data.List (sortOn)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (isNothing, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -24,8 +25,8 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import GHC.Clock (getMonotonicTime)
 import Gui.State
-import Gui.View (ViewCache, appView)
-import NanoUI (Input (..), Key (..), Rect (..), V2 (..), emptyInput, inputKeysFromList)
+import Gui.View (ViewCache, appView, rowH)
+import NanoUI (Input (..), Key (..), Modifiers (..), Rect (..), V2 (..), emptyInput, inputKeysFromList)
 import NanoUI.Backend.Sdl (SdlEnv, SdlOptions (..), newSdlContext, saveScreenshot, sdlDrawFrame, withSdl)
 import NanoUI.Context (Context)
 import NanoUI.Testing (collectOverlayTextSpans, collectTextSpans, withTheme)
@@ -141,18 +142,53 @@ selfTestSteps opts env cache dir = do
     expect "Installed apps"
     shot "01-list"
 
+    step "ctrl+A with nothing focused"
+    -- The other half of the guard below: with no field holding the keyboard,
+    -- Ctrl+A still selects everything on screen.
+    frame base {inputChars = "a", inputModifiers = (inputModifiers base) {modCtrl = True}}
+    settle
+    selectedAll <- Set.size . stSelected <$> readState env
+    unless (selectedAll == V.length (stPackages st0)) $
+      fail
+        ( "selftest: ctrl+A selected " <> show selectedAll <> " apps, not all "
+            <> show (V.length (stPackages st0))
+        )
+    modifyState env (\s -> s {stSelected = Set.empty})
+    settle
+
     step "scrolling"
-    -- A notch is three rows, and the glide lands within the settle frames
+    -- A notch is one row, and the glide lands within the settle frames
     -- (headless frames carry no elapsed time, so a scroll finishes at once).
     -- The list is virtualized, so this also proves the rows it builds follow
     -- the offset.
     let rowTexts = fmap (map (\(_, txt, _, _, _) -> txt)) spans
+        -- Where each piece of text sits, for the text drawn exactly once.
+        -- A string two rows share (a repeated version) says nothing about
+        -- which of them moved, so it is left out.
+        rowYs ss =
+          Map.fromList
+            [ (txt, rectY r)
+            | (txt, [r]) <- Map.toList (Map.fromListWith (<>) [(t, [r]) | (r, t, _, _, _) <- ss])
+            ]
         wheel notches =
           frame base {inputMousePos = V2 780 600, inputScroll = V2 0 notches} >> settle
     atTop <- rowTexts
-    wheel 3
+    beforeY <- rowYs <$> spans
+    wheel 1
     scrolled <- rowTexts
     when (scrolled == atTop) $ dumpVisible >> fail "selftest: the wheel did not scroll the list"
+    -- One notch is one whole row: the chrome above the list stays where it is
+    -- and everything else has risen by exactly rowH, never a part of a row.
+    afterY <- rowYs <$> spans
+    let shifts = Map.elems (Map.intersectionWith (-) beforeY afterY)
+        movedByRow = [d | d <- shifts, abs (d - rowH) < 0.5]
+        strays = [d | d <- shifts, abs d >= 0.5, abs (d - rowH) >= 0.5]
+    unless (null strays) $
+      dumpVisible
+        >> fail ("selftest: a notch moved text by " <> show strays <> ", not one row of " <> show rowH)
+    when (length movedByRow < 5) $
+      dumpVisible >> fail "selftest: a notch did not move the list down a row"
+    wheel 2
     shot "10-scrolled"
     wheel (-40)
     backAtTop <- rowTexts
@@ -165,6 +201,16 @@ selfTestSteps opts env cache dir = do
     settle
     expect " of "
     shot "02-search"
+
+    step "ctrl+A in the search field"
+    -- The field is focused from the step above. Ctrl+A belongs to the text
+    -- being edited, so it must not reach the list and select every app.
+    frame base {inputChars = "a", inputModifiers = (inputModifiers base) {modCtrl = True}}
+    settle
+    selectedWhileEditing <- Set.size . stSelected <$> readState env
+    unless (selectedWhileEditing == 0) $
+      dumpVisible
+        >> fail ("selftest: ctrl+A while editing selected " <> show selectedWhileEditing <> " apps")
 
     step "details dialog"
     st <- readState env

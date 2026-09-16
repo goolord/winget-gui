@@ -6,6 +6,7 @@ module Gui.View
   ( ViewCache
   , newViewCache
   , appView
+  , rowH
   )
 where
 
@@ -172,13 +173,13 @@ appView env cache = do
       anyModal = isJust pending || isJust details || rulesOpen
 
   -- Keyboard: Ctrl+A selects what is shown, Delete uninstalls the selection,
-  -- Escape is handled at the end of the frame, after every widget has run.
-  editing <- uiIO (textFieldActive ctx)
+  -- Escape clears it. All three are applied at the end of the frame, after
+  -- every widget has run. Whether a text field holds focus can only be asked
+  -- once this frame's nodes exist -- the arena is reset before the view is
+  -- built, so asking here would always answer "no" and hand the list every
+  -- keystroke meant for the search box.
   let keys = inputKeys inp
       ctrlA = modCtrl (inputModifiers inp) && T.any (`T.elem` "aA\x01") (inputChars inp)
-  when (ctrlA && not editing && not anyModal) $ setSelection (Set.union visibleIds)
-  when (inputKeysElem KeyDelete keys && not editing && not anyModal && not (null selectedPackages)) $
-    setPending (Just (PendingBatch OpUninstall selectedPackages))
 
   -- List geometry as the scroller last laid it out, used by the header too.
   -- The viewport is what the rows actually show through: inside the padding
@@ -241,7 +242,9 @@ appView env cache = do
           whenM (button "Refresh") (uiIO (refresh env (stHasUpdateInfo st)))
           whenM (button "Check updates") (uiIO (refresh env True))
 
-        -- Status and selection actions
+        -- Status and selection actions. alignMid on the row places the row
+        -- itself; centring the contents in the 48px band takes one on each
+        -- child, the way a package row centres its cells.
         rowWith (fillW . fixedH 48 . padXY 16 0 . gap 12 . alignMid . tight) $ do
           let total = V.length (stPackages st)
               updates = V.length (V.filter (not . T.null . pkgAvailable) (stPackages st))
@@ -249,28 +252,30 @@ appView env cache = do
               counts
                 | n == total = tshow total <> " apps"
                 | otherwise = tshow n <> " of " <> tshow total <> " apps"
-          labelWith (tight . fontMedium . fontColor (palText pal)) counts
-          unless (shownSize == 0) $ labelWith (tight . fontColor (palTextMuted pal)) (formatSize shownSize)
-          when (stHasUpdateInfo st && updates > 0) $ badge (palGreen pal) (tshow updates <> " updates")
+              statusLabel f = labelWith (alignMid . tight . f)
+          statusLabel (fontMedium . fontColor (palText pal)) counts
+          unless (shownSize == 0) $ statusLabel (fontColor (palTextMuted pal)) (formatSize shownSize)
+          when (stHasUpdateInfo st && updates > 0) $
+            rowWith (alignMid . tight) (badge (palGreen pal) (tshow updates <> " updates"))
           case (stLoading st, stError st) of
-            (Just msg, _) -> labelWith (tight . fontColor (palAccent pal)) msg
-            (_, Just err) -> labelWith (tight . fontColor (palRed pal)) (ellipsize 110 err)
-            _ | total > 0 -> labelWith (tight . fontColor (palTextFaint pal)) ("listed in " <> tshow (round (stLoadSeconds st * 1000) :: Int) <> " ms")
+            (Just msg, _) -> statusLabel (fontColor (palAccent pal)) msg
+            (_, Just err) -> statusLabel (fontColor (palRed pal)) (ellipsize 110 err)
+            _ | total > 0 -> statusLabel (fontColor (palTextFaint pal)) ("listed in " <> tshow (round (stLoadSeconds st * 1000) :: Int) <> " ms")
             _ -> pure ()
           forM_ notice $ \msg -> do
-            labelWith (tight . fontColor (palYellow pal)) (ellipsize 80 msg)
-            whenM (buttonWith tight "Dismiss") (setNotice Nothing)
+            statusLabel (fontColor (palYellow pal)) (ellipsize 80 msg)
+            whenM (buttonWith (alignMid . tight) "Dismiss") (setNotice Nothing)
           flex
           unless (null selectedPackages) $ do
-            labelWith (tight . fontSemiBold . fontColor (palAccent pal)) (tshow (length selectedPackages) <> " selected")
-            whenM (buttonWith (fontColor (palRed pal)) "Uninstall selected") $
+            statusLabel (fontSemiBold . fontColor (palAccent pal)) (tshow (length selectedPackages) <> " selected")
+            whenM (buttonWith (alignMid . fontColor (palRed pal)) "Uninstall selected") $
               setPending (Just (PendingBatch OpUninstall selectedPackages))
             let upgradable = filter (not . T.null . pkgAvailable) selectedPackages
             unless (null upgradable) $
-              whenM (buttonWith (fontColor (palGreen pal)) ("Upgrade " <> tshow (length upgradable))) $
+              whenM (buttonWith (alignMid . fontColor (palGreen pal)) ("Upgrade " <> tshow (length upgradable))) $
                 setPending (Just (PendingBatch OpUpgrade upgradable))
-            whenM (button "Clear") (setSelection (const Set.empty))
-          unless (V.null visible) $ whenM (button "Select shown") (setSelection (Set.union visibleIds))
+            whenM (buttonWith alignMid "Clear") (setSelection (const Set.empty))
+          unless (V.null visible) $ whenM (buttonWith alignMid "Select shown") (setSelection (Set.union visibleIds))
         separator
 
         -- Column headers, laid out exactly like a row
@@ -320,9 +325,11 @@ appView env cache = do
             pure (concat acts)
     uiIO $ do
       writeIORef (vcListWid cache) (Just wid)
-      -- A notch moves the list three whole rows, the way Explorer's list does.
-      -- Everything else in the window keeps the default step.
-      setScrollStep ctx wid (3 * rowH)
+      -- A notch moves the list by exactly one row, so rows always sit at the
+      -- same place in the viewport rather than half-cut. Rows are 54px, close
+      -- enough to the 60px default that this costs no speed. Everything else
+      -- in the window keeps the default step.
+      setScrollStep ctx wid rowH
 
     -- Clicking a row's text (press and release on the same row) opens details.
     when (inputMousePressed inp) $ setPressedRow (rowAt (inputMousePos inp))
@@ -487,6 +494,17 @@ appView env cache = do
             r <- uiIO (try @SomeException (T.writeFile path body))
             either (setNotice . Just . T.pack . displayException) (const (setNotice (Just ("Saved " <> T.pack path)))) r
       _ -> uiIO (writeIORef (vcDialog cache) Nothing)
+
+  -- Whether a text field owns the keyboard right now. Read here, not at the
+  -- top of the frame: the node arena is reset before the view is built, so
+  -- the focused field only exists to be found once its widget has run.
+  editing <- uiIO (textFieldActive ctx)
+
+  -- Ctrl+A and Delete belong to whatever is being edited before they belong
+  -- to the list.
+  when (ctrlA && not editing && not anyModal) $ setSelection (Set.union visibleIds)
+  when (inputKeysElem KeyDelete keys && not editing && not anyModal && not (null selectedPackages)) $
+    setPending (Just (PendingBatch OpUninstall selectedPackages))
 
   -- Escape closes a dialog, or else clears the selection. If a drop-down or
   -- popup was on screen this frame or the last, the Escape was for it and the
