@@ -212,6 +212,18 @@ selfTestSteps opts env cache dir = do
       dumpVisible
         >> fail ("selftest: ctrl+A while editing selected " <> show selectedWhileEditing <> " apps")
 
+    step "escape clears the selection while the search field has focus"
+    -- The field is still focused from the ctrl+A step. Escape is not the
+    -- field's (nano-ui's text input ignores it), so it must still reach the
+    -- list, or a selection could never be cleared from the keyboard.
+    modifyState env (\s -> s {stSelected = Set.fromList (map pkgId (V.toList (V.take 3 (stPackages s))))})
+    settle
+    press KeyEscape
+    stillSelected <- Set.size . stSelected <$> readState env
+    unless (stillSelected == 0) $
+      dumpVisible
+        >> fail ("selftest: escape left " <> show stillSelected <> " apps selected while editing")
+
     step "details dialog"
     st <- readState env
     firstMatch <- case V.toList (visiblePackages st "2C-Audio" FilterAll Nothing SortName False) of

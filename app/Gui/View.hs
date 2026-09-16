@@ -93,6 +93,14 @@ rowMinW = 2 * 14 + 22 + 220 + publisherW + versionW + sizeColW + dateW + actionW
 nameBlockNudge :: Layout -> Layout
 nameBlockNudge layout = layout {layoutPadding = (layoutPadding layout) {padT = 4}}
 
+-- | The status line's slot. The row above it ends with 12px of padding inside
+-- its own band, while this row has none, so centring in the raw 48px band
+-- reads low: the eye measures the gap from the row above's text, not from its
+-- box edge. Matching that padding at the bottom centres the contents in the
+-- gap that is actually visible, between the row above and the separator below.
+statusRowPad :: Layout -> Layout
+statusRowPad layout = layout {layoutPadding = (layoutPadding layout) {padB = 12}}
+
 -- | Known drives in order, then apps whose drive could not be determined.
 diskStats :: Vector Package -> [DiskStat]
 diskStats pkgs =
@@ -245,7 +253,7 @@ appView env cache = do
         -- Status and selection actions. alignMid on the row places the row
         -- itself; centring the contents in the 48px band takes one on each
         -- child, the way a package row centres its cells.
-        rowWith (fillW . fixedH 48 . padXY 16 0 . gap 12 . alignMid . tight) $ do
+        rowWith (fillW . fixedH 48 . statusRowPad . padXY 16 0 . gap 12 . alignMid . tight) $ do
           let total = V.length (stPackages st)
               updates = V.length (V.filter (not . T.null . pkgAvailable) (stPackages st))
               shownSize = V.sum (V.map pkgSize visible)
@@ -515,10 +523,15 @@ appView env cache = do
   -- store, and is still set here because input is resolved after the view.
   selectOpen <- uiIO (anySelectOpen <$> getStore ctx)
   uiIO (writeIORef (vcPopupOpen cache) popupOpen)
+  -- Escape is deliberately not guarded on `editing`, unlike Ctrl+A and Delete
+  -- above. nano-ui's text input ignores Escape, so no field consumes it and
+  -- none gives up focus for it; guarding on focus would mean that once the
+  -- search box had been clicked -- which is most of the time -- Escape could
+  -- never clear the selection again.
   when (inputKeysElem KeyEscape keys) $
     if anyModal
       then setPending Nothing >> setDetails Nothing >> setRulesOpen False
-      else unless (editing || selectOpen || popupWasOpen || popupOpen) (setSelection (const Set.empty))
+      else unless (selectOpen || popupWasOpen || popupOpen) (setSelection (const Set.empty))
 
 packageRow :: Int -> Bool -> Bool -> Package -> NanoUI [RowAction]
 packageRow ix isSelected isBusy p =
