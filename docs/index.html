@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>winget-gui</title>
+<meta name="description" content="A fast replacement for Windows' Installed apps page, with bulk and automated uninstallation.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#128230;</text></svg>">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<style>
+  :root {
+    --pico-primary: #2f81f7;
+    --pico-primary-hover: #58a6ff;
+    --pico-primary-focus: rgba(47, 129, 247, 0.3);
+    --pico-primary-inverse: #fff;
+    --pico-border-radius: 0.5rem;
+  }
+  body > main { padding-block: 4rem; max-width: 46rem; }
+  hgroup > h1 { margin-bottom: 0.25rem; font-size: clamp(2.2rem, 7vw, 3rem); }
+  .download { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; margin: 2.5rem 0; }
+  .download a[role="button"] { width: auto; padding-inline: 2.5rem; font-size: 1.05rem; }
+  .meta { color: var(--pico-muted-color); font-size: 0.85rem; margin: 0; min-height: 1.2em; }
+  figure { margin: 2.5rem 0; }
+  figure img { border-radius: var(--pico-border-radius); border: 1px solid var(--pico-muted-border-color); }
+  footer { text-align: center; color: var(--pico-muted-color); font-size: 0.85rem; padding-bottom: 3rem; }
+</style>
+</head>
+<body>
+<main class="container">
+  <hgroup>
+    <h1>winget-gui</h1>
+    <p>A fast replacement for Windows&rsquo; <strong>Settings &rarr; Apps &rarr; Installed apps</strong>, built on
+       <a href="https://github.com/microsoft/winget-cli">WinGet</a>&rsquo;s COM API &mdash; with bulk and automated uninstallation.</p>
+  </hgroup>
+
+  <div class="download">
+    <a id="dl" role="button" href="https://github.com/goolord/winget-gui/releases/latest">Download for Windows</a>
+    <p class="meta" id="meta"></p>
+  </div>
+
+  <figure>
+    <img src="https://github.com/user-attachments/assets/4ebdc144-bd0b-419e-a92f-b2d5d78332eb"
+         alt="winget-gui showing the installed apps list" width="1562" height="1002">
+  </figure>
+
+  <ul>
+    <li><strong>Fast.</strong> The list appears as soon as WinGet&rsquo;s local catalog is read; upgrades fill in
+        afterwards in the background. 1,337 apps listed in 1.7&nbsp;s, against ~16.5&nbsp;s for Settings.</li>
+    <li><strong>Bulk operations.</strong> Check any number of apps and uninstall or upgrade them in one go,
+        silently or interactively, with a live queue you can stop, skip, and retry.</li>
+    <li><strong>Automation.</strong> Select apps by rule, save rule files, and run them headlessly with
+        <code>winget-gui-cli</code>.</li>
+    <li><strong>More detail than Settings.</strong> WinGet id, source, scope, installer type, architecture,
+        install location, product codes, disk usage per drive, and available upgrades.</li>
+  </ul>
+
+  <p>Unzip anywhere and run <code>winget-gui.exe</code>. Requires Windows with App Installer (WinGet) present;
+     the folder is self-contained. Source and build instructions are on
+     <a href="https://github.com/goolord/winget-gui">GitHub</a>.</p>
+</main>
+<footer class="container">
+  <a href="https://github.com/goolord/winget-gui">github.com/goolord/winget-gui</a>
+</footer>
+
+<script>
+(async () => {
+  const dl = document.getElementById('dl'), meta = document.getElementById('meta');
+  try {
+    const r = await fetch('https://api.github.com/repos/goolord/winget-gui/releases/latest');
+    if (!r.ok) throw new Error(r.status);
+    const rel = await r.json();
+    const asset = rel.assets.find(a => /\.(zip|msi|exe)$/i.test(a.name)) || rel.assets[0];
+    if (!asset) throw new Error('no assets');
+    dl.href = asset.browser_download_url;
+    dl.textContent = 'Download ' + (rel.tag_name || '') + ' for Windows';
+    const mb = (asset.size / 1048576).toFixed(1);
+    const date = new Date(rel.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+    meta.textContent = asset.name + ' · ' + mb + ' MB · ' + date;
+  } catch {
+    meta.innerHTML = 'No release published yet &mdash; ' +
+      '<a href="https://github.com/goolord/winget-gui#building">build from source</a>.';
+  }
+})();
+</script>
+</body>
+</html>
