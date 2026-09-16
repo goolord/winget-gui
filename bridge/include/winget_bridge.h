@@ -1,4 +1,4 @@
-/* C ABI between the Haskell GUI and the Rust WinGet bridge (winget_bridge.dll).
+/* C ABI between the Haskell GUI and the Rust WinGet bridge (libwinget_bridge.a).
  *
  * All strings are UTF-8. Buffers returned by the bridge are owned by the
  * caller and must be released with wg_free. Every function is safe to call

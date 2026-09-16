@@ -7,7 +7,11 @@ description = "C ABI over the WinGet COM API (Microsoft.Management.Deployment) f
 
 [lib]
 name = "winget_bridge"
-crate-type = ["cdylib"]
+# A static library: the Rust code and its dependencies are linked into the
+# executables, so a release ships no winget_bridge.dll. It is built for the
+# gnullvm target, whose ABI matches the toolchain GHC links with (clang, lld,
+# compiler-rt, UCRT); see build/Build.hs.
+crate-type = ["staticlib"]
 
 [dependencies]
 windows-core = "0.100"

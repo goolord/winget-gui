@@ -38,28 +38,49 @@ automated uninstallation.
 
 | Path | What it is |
 | --- | --- |
-| `bridge/` | Rust `cdylib` exposing a small C ABI over WinGet (`include/winget_bridge.h`). Bindings are generated from `winmd/Microsoft.Management.Deployment.winmd` by `bridge/gen`. |
+| `bridge/` | Rust static library exposing a small C ABI over WinGet (`include/winget_bridge.h`). Bindings are generated from `winmd/Microsoft.Management.Deployment.winmd` by `bridge/gen`. |
 | `src/WinGet/Bridge.hs` | Haskell FFI to the bridge: listing, uninstall/upgrade with progress and cancellation. |
 | `src/WinGet/Queue.hs` | Bulk job runner shared by the GUI and CLI. |
 | `src/WinGet/Select.hs` | Selection rules and rule files. |
 | `app/Gui/` | The nano-ui application: state, view, and headless self-test. |
 | `app/Cli.hs` | `winget-gui-cli`, the headless front end. |
+| `build/Build.hs` | The [Shake](https://shakebuild.com) build: bridge, executables, vendored SDL3, `dist\`, release zip. |
 
 ## Building
 
-Requirements: GHC 9.14 and cabal, Rust (MSVC toolchain), and SDL3 + SDL3_ttf
-with `pkg-config` (for example from MSYS2 UCRT64). nano-ui is fetched from
-GitHub at the commit pinned in `cabal.project`.
+Requirements: GHC 9.14 and cabal, Rust with `rustup`, `pkg-config`, and LLVM's
+binutils (`llvm-readobj`, `llvm-strip`) on `PATH`. nano-ui is fetched from
+GitHub at the commit pinned in `cabal.project`; SDL3 and SDL3_ttf are fetched
+and checksummed by the build itself.
 
 ```powershell
-pwsh scripts\build.ps1        # builds the bridge and both executables into dist\
-pwsh scripts\build.ps1 -Run   # ...and starts the GUI
+cabal run build                 # bridge and both executables into dist\
+cabal run build -- run          # ...and start the GUI
+cabal run build -- selftest     # ...and run the scripted self-test
+cabal run build -- package      # ...and zip it into release\
+cabal run build -- clean
 ```
 
-`dist\` is self-contained: the stripped executables, `winget_bridge.dll`,
-SDL3 and SDL3_ttf, and the MSYS2 DLLs they load (found by following imports
-with `llvm-readobj` or `objdump`). Copy the folder anywhere with App Installer
-(WinGet) present.
+`dist\` holds four files -- the two stripped executables, `SDL3.dll` and
+`SDL3_ttf.dll` -- and nothing else is needed: copy it anywhere with App
+Installer (WinGet) present. Once `cabal run build` has produced the bridge and
+fetched SDL, a plain `cabal build` works too, but it links against whatever
+SDL3 `pkg-config` finds on `PATH`; alternating between the two makes cabal
+reconfigure and rebuild `nano-ui-sdl` each time.
+
+Everything Haskell and Rust is linked into the executables. The bridge is a
+static library built for the `x86_64-pc-windows-gnullvm` target, whose ABI
+matches the toolchain GHC links with, so there is no `winget_bridge.dll` and no
+Visual C++ runtime to install. SDL3 and SDL3_ttf come from upstream's MinGW
+builds, which carry FreeType and HarfBuzz inside `SDL3_ttf.dll` rather than as
+the dozen further DLLs MSYS2's builds pull in.
+
+Every build checks what `dist\` imports and fails on anything that is neither
+staged there nor part of Windows, so a release cannot quietly depend on a DLL
+that only exists on the machine that built it. The SDL pins in
+`build/Build.hs` are tied to the ABI baked into `sdl3-bindgen-sys`, which
+asserts struct sizes against the headers it compiles against; bump them
+together.
 
 ## Using the CLI
 

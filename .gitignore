@@ -5,3 +5,5 @@ bridge/gen/target/
 *.prof
 *.hp
 cabal.project.local*
+vendor/
+release/

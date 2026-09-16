@@ -1,0 +1,20 @@
+cabal-version:      3.4
+name:               winget-gui-build
+version:            0.1.0.0
+synopsis:           Shake build for winget-gui: the Rust bridge, the executables, and the release folder
+license:            MIT
+build-type:         Simple
+
+executable build
+    default-language: GHC2024
+    main-is:          Build.hs
+    hs-source-dirs:   .
+    build-depends:
+        SHA,
+        base,
+        bytestring,
+        directory,
+        shake,
+        time,
+        zip-archive
+    ghc-options: -Wall -Wcompat -Wunused-packages -threaded

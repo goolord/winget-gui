@@ -13,12 +13,18 @@ common shared
         LambdaCase
     ghc-options: -Wall -Wcompat -Wunused-packages
 
--- The executables link bridge/target/release/winget_bridge. Build it with
--- scripts/build.ps1, which also copies the import library to the name GHC's
--- linker searches for. The directory is relative, so it is given per
--- executable: a registered library may not carry relative library paths.
+-- The executables link the Rust bridge statically, from the static library
+-- build/Build.hs has cargo produce for the gnullvm target. The directory is
+-- relative, so it is given per executable: a registered library may not carry
+-- relative library paths.
+--
+-- Rust's standard library refers to the _Unwind_* entry points even with
+-- panic=abort. GHC's toolchain ships both libunwind.a and libunwind.dll.a, and
+-- the linker prefers the import library, which would put libunwind.dll in the
+-- release; -l:libunwind.a names the static one.
 common bridge-link
-    extra-lib-dirs:   bridge/target/release
+    extra-lib-dirs:   bridge/target/x86_64-pc-windows-gnullvm/release
+    ghc-options:      -optl-l:libunwind.a
 
 -- WinGet access shared by the GUI and the CLI.
 library
