@@ -5,7 +5,8 @@ remove programs"), built on [nano-ui](https://github.com/goolord/nano-ui) and
 the [WinGet](https://github.com/microsoft/winget-cli) COM API, with bulk and
 automated uninstallation.
 
-<img width="1562" height="1002" alt="image" src="https://github.com/user-attachments/assets/4ebdc144-bd0b-419e-a92f-b2d5d78332eb" />
+https://github.com/user-attachments/assets/273b6a4b-a5d6-4e4c-a449-d92da5a5d568
+
 
 - **Fast**: the installed list appears as soon as WinGet's local catalog is
   read, and upgrade information is filled in afterwards in the background.
