@@ -13,7 +13,7 @@ where
 import Control.Exception (SomeException, displayException, try)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import Data.List (findIndex)
+import Data.List (findIndex, intersperse)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, listToMaybe)
 import Data.Set qualified as Set
@@ -77,7 +77,7 @@ rowH = 54
 checkW = 56
 publisherW = 220
 versionW = 160
-sizeColW = 104
+sizeColW = 132
 dateW = 126
 actionW = 196
 
@@ -112,11 +112,16 @@ diskStats pkgs =
 
 diskLabel :: DiskStat -> Text
 diskLabel stat =
-  T.intercalate "  ·  " $
-    [ if T.null (dsDrive stat) then "Unknown disk" else dsDrive stat
-    , tshow (dsCount stat) <> (if dsCount stat == 1 then " app" else " apps")
-    ]
-      <> [formatSize (dsSize stat) | dsSize stat > 0]
+  (if T.null (dsDrive stat) then "Unknown disk" else dsDrive stat)
+    <> " ("
+    <> T.intercalate ", " ([thousands (dsCount stat) <> (if dsCount stat == 1 then " app" else " apps")] <> [formatSize (dsSize stat) | dsSize stat > 0])
+    <> ")"
+
+-- | A count with thousands separated, as Windows writes them: 1,331.
+thousands :: Int -> Text
+thousands k
+  | k < 0 = "-" <> thousands (negate k)
+  | otherwise = T.reverse (T.intercalate "," (T.chunksOf 3 (T.reverse (tshow k))))
 
 appView :: Env -> ViewCache -> NanoUI ()
 appView env cache = do
@@ -195,6 +200,14 @@ appView env cache = do
   mWid <- uiIO (readIORef (vcListWid cache))
   mMetrics <- maybe (pure Nothing) (uiIO . getScrollMetrics ctx) mWid
   let n = V.length visible
+      -- Size bars are shares of the largest app shown, so a filter rescales
+      -- them. App sizes run from KB to hundreds of GB, so the share is on a log
+      -- scale from 1 MB: on a linear one, all but a few bars would be empty.
+      largest = V.foldl' (\m p -> max m (pkgSize p)) 0 visible
+      logMB bytes = logBase 10 (max 1 (fromIntegral bytes / 1048576)) :: Double
+      share bytes
+        | bytes == 0 || logMB largest <= 0 = 0
+        | otherwise = realToFrac (logMB bytes / logMB largest) :: Float
       -- A stand-in until the list has been laid out once.
       viewport = maybe (Rect 0 0 600 600) scrollViewport mMetrics
       off = maybe (V2 0 0) scrollOffset mMetrics
@@ -214,23 +227,28 @@ appView env cache = do
       -- The row under a point, if the point is on a row's text rather than
       -- its checkbox or buttons. Rows have a fixed height, so this is
       -- arithmetic on the viewport and the scroll offset.
-      rowAt pos
+      rowAt pos =
+        rowIndexAt pos >>= \i ->
+          -- Content x: follows horizontal scroll in a narrow window.
+          let localX = v2X pos - rectX viewport + v2X off
+           in if localX > checkW && localX < max (rectW viewport) rowMinW - actionW - 24
+                then Just (pkgId (visible V.! i))
+                else Nothing
+      -- The row under a point anywhere across its width.
+      rowIndexAt pos
         | not anyModal && isJust mMetrics && rectContains viewport pos =
             let i = floor ((v2Y pos - rectY viewport + y) / rowH)
-                -- Content x: follows horizontal scroll in a narrow window.
-                localX = v2X pos - rectX viewport + v2X off
-             in if i >= 0 && i < n && localX > checkW && localX < max (rectW viewport) rowMinW - actionW - 24
-                  then Just (pkgId (visible V.! i))
-                  else Nothing
+             in if i >= 0 && i < n then Just i else Nothing
         | otherwise = Nothing
+      hoveredRow = rowIndexAt (inputMousePos inp)
 
   columnWith (fillW . fillH . gap 0 . tight) $ do
-    panelStyledWith (palSurface pal) (palSurface pal) (fillW . tight) $
+    surface (palSurface pal) (palSurface pal) 0 (fillW . tight) $
       columnWith (fillW . gap 0 . tight) $ do
         -- Title, search, filters, and list actions
         rowWith (fillW . padXY 16 12 . gap 10 . alignMid . tight) $ do
-          labelWith (tight . fontSemiBold . fontSize 24 . fontColor (palText pal)) "Installed apps"
-          spacer (Fixed 8) Fit
+          labelWith (tight . alignMid . fontSemiBold . fontSize 24 . fontColor (palText pal)) "Installed apps"
+          spacer (Fixed 12) Fit
           q <- rowWith (tight . fixedW 320) (searchField "Search name, id, or publisher" query)
           when (q /= query) (setQuery q)
           fm <- uiFontMetrics
@@ -246,9 +264,11 @@ appView env cache = do
           when (k /= diskIx) $
             setDiskChoice (if k == 0 then Nothing else dsDrive <$> listToMaybe (drop (k - 1) disks))
           flex
-          whenM (button "Select by rule…") (setRulesOpen True)
-          whenM (button "Refresh") (uiIO (refresh env (stHasUpdateInfo st)))
-          whenM (button "Check updates") (uiIO (refresh env True))
+          whenM (actionButton "Select by rule…") (setRulesOpen True)
+          -- A listing is already on its way while one is loading.
+          disabledWhen (isJust (stLoading st)) $ do
+            whenM (actionButton "Refresh") (uiIO (refresh env (stHasUpdateInfo st)))
+            whenM (actionButton "Check updates") (uiIO (refresh env True))
 
         -- Status and selection actions. alignMid on the row places the row
         -- itself; centring the contents in the 48px band takes one on each
@@ -257,33 +277,42 @@ appView env cache = do
           let total = V.length (stPackages st)
               updates = V.length (V.filter (not . T.null . pkgAvailable) (stPackages st))
               shownSize = V.sum (V.map pkgSize visible)
+              selectedBytes = sum (map pkgSize selectedPackages)
+              selectedSize = if selectedBytes == 0 then "" else ", " <> formatSize selectedBytes
               counts
-                | n == total = tshow total <> " apps"
-                | otherwise = tshow n <> " of " <> tshow total <> " apps"
+                | n == total = thousands total <> " apps"
+                | otherwise = thousands n <> " of " <> thousands total <> " apps"
               statusLabel f = labelWith (alignMid . tight . f)
           statusLabel (fontMedium . fontColor (palText pal)) counts
-          unless (shownSize == 0) $ statusLabel (fontColor (palTextMuted pal)) (formatSize shownSize)
+          unless (shownSize == 0) $ statusLabel (fontColor (palTextMuted pal)) ("using " <> formatSize shownSize)
           when (stHasUpdateInfo st && updates > 0) $
-            rowWith (alignMid . tight) (badge (palGreen pal) (tshow updates <> " updates"))
+            statusLabel (fontColor (palGreen pal)) (thousands updates <> (if updates == 1 then " update" else " updates"))
           case (stLoading st, stError st) of
-            (Just msg, _) -> statusLabel (fontColor (palAccent pal)) msg
-            (_, Just err) -> statusLabel (fontColor (palRed pal)) (ellipsize 110 err)
+            (Just msg, _) -> do
+              spinnerWith alignMid 16
+              statusLabel (fontColor (palAccent pal)) msg
+            (_, Just err) -> do
+              icon 16 (palRed pal) iconAlert
+              statusLabel (fontColor (palRed pal)) (ellipsize 110 err)
             _ | total > 0 -> statusLabel (fontColor (palTextFaint pal)) ("listed in " <> tshow (round (stLoadSeconds st * 1000) :: Int) <> " ms")
             _ -> pure ()
           forM_ notice $ \msg -> do
+            icon 16 (palYellow pal) iconAlert
             statusLabel (fontColor (palYellow pal)) (ellipsize 80 msg)
-            whenM (buttonWith (alignMid . tight) "Dismiss") (setNotice Nothing)
+            styled quiet $ whenM (compactButton "Dismiss") (setNotice Nothing)
           flex
+          styled quiet $ disabledWhen (V.null visible) $
+            whenM (actionButton "Select shown") (setSelection (Set.union visibleIds))
           unless (null selectedPackages) $ do
-            statusLabel (fontSemiBold . fontColor (palAccent pal)) (tshow (length selectedPackages) <> " selected")
-            whenM (buttonWith (alignMid . fontColor (palRed pal)) "Uninstall selected") $
-              setPending (Just (PendingBatch OpUninstall selectedPackages))
+            styled quiet $ whenM (actionButton "Clear") (setSelection (const Set.empty))
+            spacer (Fixed 4) Fit
+            statusLabel (fontSemiBold . fontColor (palAccent pal)) (thousands (length selectedPackages) <> " selected" <> selectedSize)
             let upgradable = filter (not . T.null . pkgAvailable) selectedPackages
             unless (null upgradable) $
-              whenM (buttonWith (alignMid . fontColor (palGreen pal)) ("Upgrade " <> tshow (length upgradable))) $
+              styled success $ whenM (actionButton ("Upgrade " <> tshow (length upgradable))) $
                 setPending (Just (PendingBatch OpUpgrade upgradable))
-            whenM (buttonWith alignMid "Clear") (setSelection (const Set.empty))
-          unless (V.null visible) $ whenM (buttonWith alignMid "Select shown") (setSelection (Set.union visibleIds))
+            styled destructive $ whenM (actionButton "Uninstall selected") $
+              setPending (Just (PendingBatch OpUninstall selectedPackages))
         separator
 
         -- Column headers, laid out exactly like a row
@@ -317,18 +346,23 @@ appView env cache = do
       columnWith (fillW . gap 0 . tight) $
         if n == 0
           then do
-            rowWith (fillW . padXY 24 32 . tight) $
-              labelWith (tight . fontColor (palTextMuted pal)) $
-                case (stLoading st, V.null (stPackages st)) of
-                  (Just msg, True) -> msg
-                  (_, True) -> "No apps listed."
-                  _ -> "No apps match the search or filters."
+            rowWith (fillW . padXY 24 40 . gap 12 . alignMid . tight) $
+              case (stLoading st, V.null (stPackages st)) of
+                (Just msg, True) -> do
+                  spinnerWith alignMid 20
+                  labelWith (tight . alignMid . fontColor (palTextMuted pal)) msg
+                (_, True) -> do
+                  icon 22 (palTextFaint pal) iconBox
+                  labelWith (tight . alignMid . fontColor (palTextMuted pal)) "No apps listed."
+                _ -> do
+                  icon 22 (palTextFaint pal) iconBox
+                  labelWith (tight . alignMid . fontColor (palTextMuted pal)) "No apps match the search or filters."
             pure []
           else do
             when (lo > 0) $ spacer Fit (Fixed (fromIntegral lo * rowH))
             acts <- forM [lo .. hi] $ \i ->
               let p = visible V.! i
-               in withKey (pkgId p) (packageRow i (Set.member (pkgId p) selected) (Set.member (pkgId p) busy) p)
+               in withKey (pkgId p) (packageRow i (share (pkgSize p)) (hoveredRow == Just i) (Set.member (pkgId p) selected) (Set.member (pkgId p) busy) p)
             when (hi < n - 1) $ spacer Fit (Fixed (fromIntegral (n - 1 - hi) * rowH))
             pure (concat acts)
     uiIO $ do
@@ -386,7 +420,6 @@ appView env cache = do
       let pkgs = pbPackages pb
           upgrading = pbKind pb == OpUpgrade
           noUninstaller = length (filter ((== NoUninstall) . pkgUninstall) pkgs)
-          tone = if upgrading then palGreen pal else palRed pal
           shownVersion p = if pkgVersion p == "Unknown" then "—" else pkgVersion p
           -- Spacers rather than padding: nano-ui fills padded containers.
           -- Sizes are multiples of 4, as in 'detailsBody'.
@@ -405,20 +438,24 @@ appView env cache = do
                 labelWith (tight . alignMid . fontSize 15 . fontColor (palTextMuted pal)) (ellipsize 22 (shownVersion p))
                 inset
             spacer Fit (Fixed 8)
-      labelWith (tight . fontColor (palTextMuted pal)) $
+      let emphasised = inlineWith (fontSemiBold . fontColor (palText pal))
+      void . richTextWith (fillW . fontColor (palTextMuted pal)) $
         if upgrading
-          then "These apps will be updated to their newest available versions."
-          else "These apps will be removed from this PC."
+          then ["These apps will be ", emphasised "updated", " to their newest available versions."]
+          else ["These apps will be ", emphasised "removed", " from this PC."]
       -- Only a long list scrolls (about six and a half rows show), so a short
       -- one has no scrollbar.
-      panelStyledWith (palBackground pal) (palBorder pal) (fillW . tight) $
+      surface (palBackground pal) (palBorder pal) 8 (fillW . tight) $
         if length pkgs > 6 then scrollWith (fillW . fixedH 244 . tight) appRows else appRows
       when (not upgrading && noUninstaller > 0) $
-        panelStyledWith (lerpColor (palSurface pal) (palYellow pal) 0.10) (lerpColor (palSurface pal) (palYellow pal) 0.40) (fillW . tight) $
-          rowWith (fillW . fixedH 44 . gap 0 . alignMid . tight) $ do
-            inset
-            labelWith (tight . alignMid . fontColor (palYellow pal)) $
-              tshow noUninstaller <> (if noUninstaller == 1 then " app has" else " apps have") <> " no registered uninstall command and may fail."
+        surface (lerpColor (palSurface pal) (palYellow pal) 0.08) (lerpColor (palSurface pal) (palYellow pal) 0.35) 8 (fillW . tight) $
+          rowWith (fillW . fixedH 44 . gap 12 . alignMid . tight) $ do
+            spacer (Fixed 4) Fit
+            icon 18 (palYellow pal) iconAlert
+            void . richTextWith (grow . alignMid . fontColor (palYellow pal)) $
+              [ inlineWith fontSemiBold (tshow noUninstaller <> (if noUninstaller == 1 then " app has" else " apps have"))
+              , " no registered uninstall command and may fail."
+              ]
       columnWith (fillW . gap 12 . tight) $ do
         optionRow "Installer UI" $ do
           m <- selectWith (fixedW 260) ["Silent (unattended)", "Installer default", "Interactive"] modeIx
@@ -434,10 +471,10 @@ appView env cache = do
           a <- checkbox "Accept package license agreements" acceptAgreements
           when (a /= acceptAgreements) (setAcceptAgreements a)
       separator
-      rowWith (fillW . gap 12 . alignMid . tight) $ do
+      rowWith (fillW . gap 8 . alignMid . tight) $ do
         flex
-        cancel <- button "Cancel"
-        go <- filledButton tone (confirmTitle pb)
+        cancel <- styled quiet (actionButton "Cancel")
+        go <- styled (if upgrading then success else destructive) (actionButton (confirmTitle pb))
         pure (cancel, go)
   when (respClicked confirmResp) (setPending Nothing)
   case (pending, join confirmAct) of
@@ -458,21 +495,27 @@ appView env cache = do
   -- Rule-based selection, shared with winget-gui-cli --from FILE
   let matches = if rulesOpen then selectPackages (parseSelectors rulesText) (stPackages st) else V.empty
   (rulesResp, rulesAct) <- modal rulesOpen "Select by rule" $ columnWith (gap 16 . minW 860 . dialogBody) $ do
-    columnWith (fillW . gap 4 . tight) $ do
-      labelWith (tight . fontColor (palTextMuted pal)) "One rule per line: id:ID, name:NAME, publisher:NAME, disk:D:, match:TEXT, or a bare id or name."
-      labelWith (tight . fontSize 15 . fontColor (palTextFaint pal)) "Lines starting with # are ignored. The same files work with winget-gui-cli --from."
-    t <- textAreaWith (fillW . fixedH 240) rulesText
+    columnWith (fillW . gap 6 . tight) $ do
+      let code = inlineWith (fontMono . fontColor (palText pal))
+      void . richTextWith (fillW . fontColor (palTextMuted pal)) $
+        ["One rule per line: "]
+          <> intersperse ", " (map code ["id:ID", "name:NAME", "publisher:NAME", "disk:D:", "match:TEXT"])
+          <> [", or a bare id or name."]
+      void . richTextWith (fillW . fontSize 15 . fontColor (palTextFaint pal)) $
+        ["Lines starting with ", code "#", " are ignored. The same files work with ", code "winget-gui-cli --from", "."]
+    t <- textAreaWith (fillW . fixedH 240 . fontMono) rulesText
     when (t /= rulesText) (setRulesText t)
     separator
-    rowWith (fillW . gap 12 . alignMid . tight) $ do
-      load <- button "Load file…"
-      save <- button "Save rules…"
+    rowWith (fillW . gap 8 . alignMid . tight) $ do
+      (load, save) <- styled quiet $ (,) <$> actionButton "Load file…" <*> actionButton "Save rules…"
       flex
       labelWith (tight . alignMid . fontColor (if V.null matches then palTextMuted pal else palText pal)) (tshow (V.length matches) <> " installed apps match")
       spacer (Fixed 8) Fit
-      add <- button "Add to selection"
-      replace <- filledButton (palAccent pal) "Select matches"
-      pure (load, save, add, replace)
+      -- Nothing to select until a rule matches.
+      disabledWhen (V.null matches) $ do
+        add <- actionButton "Add to selection"
+        replace <- styled primary (actionButton "Select matches")
+        pure (load, save, add, replace)
   when (respClicked rulesResp) (setRulesOpen False)
   forM_ rulesAct $ \(load, save, add, replace) -> do
     let openDialog purpose launch = launch defaultFileDialogOptions >>= mapM_ (\d -> uiIO (writeIORef (vcDialog cache) (Just (purpose, d))))
@@ -533,36 +576,44 @@ appView env cache = do
       then setPending Nothing >> setDetails Nothing >> setRulesOpen False
       else unless (selectOpen || popupWasOpen || popupOpen) (setSelection (const Set.empty))
 
-packageRow :: Int -> Bool -> Bool -> Package -> NanoUI [RowAction]
-packageRow ix isSelected isBusy p =
-  panelStyledWith background background (fillW . fixedH rowH . tight) $
+packageRow :: Int -> Float -> Bool -> Bool -> Bool -> Package -> NanoUI [RowAction]
+packageRow ix sizeShare isHovered isSelected isBusy p =
+  surface rowFill rowFill 0 (fillW . fixedH rowH . tight) $
     rowWith (fillW . fixedH rowH . gap 10 . alignMid . padXY 14 0 . tight) $ do
       toggled <- rowWith (alignMid . tight) (checkbox "" isSelected)
       columnWith (grow . minW 220 . gap 3 . alignMid . nameBlockNudge . cellPad . tight) $ do
         labelWith (tight . fontMedium . fontColor (palText pal)) (ellipsize 64 (pkgName p))
-        labelWith (tight . fontSize 14 . fontColor (palTextFaint pal)) (ellipsize 72 (pkgId p))
+        labelWith (tight . fontSize 14 . fontColor (if isSelected then palTextMuted pal else palTextFaint pal)) (ellipsize 72 (pkgId p))
       rowWith (fixedW publisherW . alignMid . cellPad . tight) $
         labelWith (tight . fontColor (palTextMuted pal)) (ellipsize 24 (pkgPublisher p))
       columnWith (fixedW versionW . gap 3 . alignMid . cellPad . tight) $ do
         labelWith (tight . fontSize 15 . fontColor (palTextMuted pal)) (ellipsize 18 version)
         unless (T.null (pkgAvailable p)) $
           labelWith (tight . fontSize 14 . fontColor (palGreen pal)) ("↑ " <> ellipsize 16 (pkgAvailable p))
-      rowWith (fixedW sizeColW . alignMid . cellPadEnd . tight) $
-        labelWith (fillW . alignEnd . tight . fontColor (palText pal)) (formatSize (pkgSize p))
+      sizeCell sizeColW (formatSize (pkgSize p)) sizeShare
       rowWith (fixedW dateW . alignMid . cellPad . tight) $
         labelWith (tight . fontColor (palTextMuted pal)) (pkgDate p)
-      acts <- rowWith (fixedW actionW . gap 6 . alignMid . alignEnd . tight) $
+      acts <- rowWith (fixedW actionW . gap 4 . alignMid . alignEnd . tight) $
         if isBusy
-          then labelWith (tight . fontColor (palYellow pal)) "Queued…" >> pure []
+          then do
+            spinnerWith alignMid 16
+            labelWith (tight . alignMid . fontColor (palTextMuted pal)) "Queued"
+            pure []
           else do
-            up <- if T.null (pkgAvailable p) then pure False else buttonWith (tight . fontColor (palGreen pal)) "Upgrade"
-            un <- buttonWith tight "Uninstall"
+            -- Filled, so a row's actions are easy to find on the stripes. An
+            -- upgrade carries a wash of green as well as green text.
+            up <-
+              if T.null (pkgAvailable p)
+                then pure False
+                else styled (buttonStyle (tintedFill (palGreen pal))) (rowButton "Upgrade")
+            un <- rowButton "Uninstall"
             pure ([RowUpgrade p | up] <> [RowUninstall p | un])
       pure ([RowToggle ix toggled | toggled /= isSelected] <> acts)
   where
     pal = palette
-    background
-      | isSelected = palAccentSoft pal
+    rowFill
+      | isSelected = if isHovered then lerpColor (palAccentSoft pal) (palAccent pal) 0.08 else palAccentSoft pal
+      | isHovered = palRowHover pal
       | odd ix = palStripe pal
       | otherwise = palBackground pal
     -- WinGet reports a missing version as "Unknown".
@@ -582,7 +633,7 @@ detailsBody p = columnWith (gap 12 . minW 720 . dialogBody) $ do
       sectionTitle title = labelWith (tight . fontSize 15 . fontSemiBold . fontColor (palTextFaint pal)) title
       section title fields = columnWith (fillW . gap 8 . tight) $ do
         sectionTitle title
-        panelStyledWith (palBackground pal) (palBorder pal) (fillW . tight) $
+        surface (palBackground pal) (palSeparator pal) 8 (fillW . tight) $
           columnWith (fillW . gap 0 . tight) $ do
             spacer Fit (Fixed 4)
             void fields
@@ -612,22 +663,34 @@ detailsBody p = columnWith (gap 12 . minW 720 . dialogBody) $ do
     rowWith (fillW . fixedH 32 . gap 0 . alignMid . tight) $ do
       inset
       labelWith (tight . fixedW 150 . alignMid . fontColor (palTextMuted pal)) "Location"
-      selectableTextWith (tight . alignMid . fontMono . fontSize 15 . fontColor (palText pal)) (orDash (pkgLocation p))
+      selectableTextWith (tight . alignMid . fontMono . fontColor (palText pal)) (orDash (pkgLocation p))
       inset
   section "Uninstall" $ do
-    field "Support" $ case pkgUninstall p of
-      HasSilentUninstall -> "Silent uninstall supported"
-      HasUninstall -> "Uninstaller registered"
-      NoUninstall -> "No uninstall command registered"
+    rowWith (fillW . fixedH 32 . gap 0 . alignMid . tight) $ do
+      inset
+      labelWith (tight . fixedW 150 . alignMid . fontColor (palTextMuted pal)) "Support"
+      rowWith (gap 8 . alignMid . tight) $ case pkgUninstall p of
+        HasSilentUninstall -> do
+          icon 20 (palGreen pal) iconCheck
+          labelWith (tight . alignMid . fontColor (palText pal)) "Silent uninstall supported"
+        HasUninstall -> do
+          icon 20 (palTextMuted pal) iconCheck
+          labelWith (tight . alignMid . fontColor (palText pal)) "Uninstaller registered"
+        NoUninstall -> do
+          icon 16 (palYellow pal) iconAlert
+          labelWith (tight . alignMid . fontColor (palYellow pal)) "No uninstall command registered"
+      inset
     field "Product codes" (joined (pkgProductCodes p))
     field "Package family" (joined (pkgFamilies p))
   separator
-  rowWith (fillW . gap 12 . alignMid . tight) $ do
-    copy <- button "Copy id"
-    open <- if T.null (pkgLocation p) then pure False else button "Open location"
+  rowWith (fillW . gap 8 . alignMid . tight) $ do
+    (copy, open) <- styled quiet $ do
+      copy <- actionButton "Copy id"
+      open <- disabledWhen (T.null (pkgLocation p)) (actionButton "Open location")
+      pure (copy, open)
     flex
-    up <- if T.null (pkgAvailable p) then pure False else filledButton (palGreen pal) "Upgrade"
-    un <- filledButton (palRed pal) "Uninstall"
+    up <- if T.null (pkgAvailable p) then pure False else styled success (actionButton "Upgrade")
+    un <- styled destructive (actionButton "Uninstall")
     pure $ case () of
       _
         | copy -> Just DetailCopyId
@@ -638,7 +701,7 @@ detailsBody p = columnWith (gap 12 . minW 720 . dialogBody) $ do
 
 queuePanel :: Env -> AppState -> NanoUI ()
 queuePanel env st =
-  panelStyledWith (palSurface pal) (palSurface pal) (fillW . fixedH 260 . tight) $
+  surface (palSurface pal) (palSurface pal) 0 (fillW . fixedH 260 . tight) $
     columnWith (fillW . fillH . padXY 16 10 . gap 8 . tight) $ do
       let jobs = stJobs st
           total = V.length jobs
@@ -649,47 +712,59 @@ queuePanel env st =
             s | jobIsFinished s -> 1
             _ -> 0
           overall = if total == 0 then 0 else V.sum (V.map progress jobs) / fromIntegral total
-      rowWith (fillW . gap 10 . alignMid . tight) $ do
-        labelWith (tight . fontSemiBold . fontColor (palText pal)) "Queue"
-        labelWith (tight . fontColor (palTextMuted pal)) (tshow finished <> " of " <> tshow total <> " finished")
-        when (failed > 0) $ badge (palRed pal) (tshow failed <> " failed")
+      rowWith (fillW . fixedH 34 . gap 10 . alignMid . tight) $ do
+        labelWith (tight . alignMid . fontSemiBold . fontColor (palText pal)) "Queue"
+        labelWith (tight . alignMid . fontColor (palTextMuted pal)) (tshow finished <> " of " <> tshow total <> " finished")
+        when (failed > 0) $ labelWith (tight . alignMid . fontColor (palRed pal)) (tshow failed <> " failed")
         flex
-        when (stActiveBatches st > 0) $ whenM (button "Stop all") (uiIO (stopBatches env))
-        when (failed > 0) $ whenM (button "Retry failed") (uiIO (retryFailed env))
-        when (finished > 0) $ whenM (button "Clear finished") (uiIO (clearFinished env))
-      progressBarWith fillW 6 (realToFrac overall)
-      scrollWith (fillW . fillH) $ columnWith (fillW . gap 2 . tight) $
+        when (finished > 0) $ styled quiet $ whenM (actionButton "Clear finished") (uiIO (clearFinished env))
+        when (failed > 0) $ whenM (actionButton "Retry failed") (uiIO (retryFailed env))
+        when (stActiveBatches st > 0) $ styled destructive $ whenM (actionButton "Stop all") (uiIO (stopBatches env))
+      progressBarWith fillW 4 (realToFrac overall)
+      scrollWith (fillW . fillH) $ columnWith (fillW . gap 0 . tight) $
         V.forM_ jobs $ \jv -> withKey (jobToken (jvJob jv)) $
-          rowWith (fillW . fixedH 34 . gap 10 . alignMid . tight) $ do
+          rowWith (fillW . fixedH 36 . gap 10 . alignMid . tight) $ do
             let job = jvJob jv
-            labelWith (tight . fixedW 90 . fontColor (palTextFaint pal)) (if jobKind job == OpUpgrade then "Upgrade" else "Uninstall")
-            labelWith (tight . fixedW 330 . fontColor (palText pal)) (ellipsize 36 (pkgName (jobPackage job)))
+            -- An inset from the list's edges. A spacer, since nano-ui fills
+            -- a container padded 8px or more with the panel colour.
+            spacer (Fixed 2) Fit
+            -- Every status leads with a mark in the same 20px slot, so the
+            -- names after it line up.
+            rowWith (fixedW 20 . alignMid . tight) $ case jvStatus jv of
+              JobPending -> pure ()
+              JobRunning {} -> spinnerWith alignMid 16
+              JobSucceeded _ -> icon 20 (palGreen pal) iconCheck
+              JobFailed _ -> icon 20 (palRed pal) iconCross
+              JobCancelled -> icon 20 (palTextFaint pal) iconCross
+            labelWith (tight . fixedW 90 . alignMid . fontColor (palTextFaint pal)) (if jobKind job == OpUpgrade then "Upgrade" else "Uninstall")
+            labelWith (tight . fixedW 330 . alignMid . fontColor (palText pal)) (ellipsize 36 (pkgName (jobPackage job)))
             -- Status grows; the action button keeps its own column so Skip and
             -- Cancel line up across rows.
             rowWith (grow . gap 10 . alignMid . tight) $ case jvStatus jv of
               JobPending ->
-                labelWith (tight . fontColor (palTextMuted pal)) (if Set.member (jobToken job) (stSkipped st) then "Skipping" else "Waiting")
+                labelWith (tight . alignMid . fontColor (palTextMuted pal)) (if Set.member (jobToken job) (stSkipped st) then "Skipping" else "Waiting")
               JobRunning state frac -> do
-                progressBarWith (fixedW 180) 6 (realToFrac frac)
-                labelWith (tight . fontColor (palTextMuted pal)) $ case state of
+                progressBarWith (fixedW 180 . alignMid) 4 (realToFrac frac)
+                labelWith (tight . alignMid . fontColor (palTextMuted pal)) $ case state of
                   StateQueued -> "Starting"
                   StateRunning -> tshow (round (frac * 100) :: Int) <> "%"
                   StatePost -> "Finishing"
                   StateFinished -> "Done"
-              JobSucceeded msg -> labelWith (tight . fontColor (palGreen pal)) msg
-              JobFailed msg -> labelWith (tight . fontColor (palRed pal)) (ellipsize 120 msg)
-              JobCancelled -> labelWith (tight . fontColor (palTextMuted pal)) "Cancelled"
-            rowWith (fixedW 96 . alignMid . tight) $ case jvStatus jv of
-              JobPending -> whenM (buttonWith tight "Skip") (uiIO (cancelJob env job))
-              JobRunning {} -> whenM (buttonWith tight "Cancel") (uiIO (cancelJob env job))
+              JobSucceeded msg -> labelWith (tight . alignMid . fontColor (palGreen pal)) msg
+              JobFailed msg -> labelWith (tight . alignMid . fontColor (palRed pal)) (ellipsize 120 msg)
+              JobCancelled -> labelWith (tight . alignMid . fontColor (palTextMuted pal)) "Cancelled"
+            rowWith (fixedW 96 . alignMid . tight) $ styled quiet $ case jvStatus jv of
+              JobPending -> whenM (compactButton "Skip") (uiIO (cancelJob env job))
+              JobRunning {} -> whenM (compactButton "Cancel") (uiIO (cancelJob env job))
               _ -> pure ()
+            spacer (Fixed 2) Fit
   where
     pal = palette
     isFailed = \case
       JobFailed _ -> True
       _ -> False
 
--- | Layout for a dialog's body. A dialog's scroll viewport is slightly
--- narrower than its content, so keep a right margin clear of the clipped edge.
+-- | Layout for a dialog's body. nano-ui pads a modal's body equally on both
+-- sides and keeps its scrollbar out in that padding, so the body adds none.
 dialogBody :: Layout -> Layout
-dialogBody l = l {layoutPadding = Padding 0 16 0 0}
+dialogBody l = l {layoutPadding = Padding 0 0 0 0}

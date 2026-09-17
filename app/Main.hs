@@ -5,7 +5,7 @@ import Gui.State (newEnv, startupLoad)
 import Gui.Style (appTheme)
 import Gui.View (appView, newViewCache)
 import NanoUI (Size (..))
-import NanoUI.Backend.Sdl (SdlOptions (..), defaultSdlOptions, runSdlApp)
+import NanoUI.Backend.Sdl (NanoUIFont (..), SdlOptions (..), defaultSdlOptions, runSdlApp)
 import System.Environment (getArgs)
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 import Text.Read (readMaybe)
@@ -16,6 +16,10 @@ windowOptions =
     { sdlWindowTitle = "Installed apps - winget-gui"
     , sdlWindowSize = Size 1560 960
     , sdlAppTheme = Just appTheme
+    , -- Windows' own faces, as its Installed apps page uses: Segoe UI Variable
+      -- (plain Segoe UI before Windows 11), and Cascadia Mono for paths and rules.
+      sdlAppFont = FontSearch ["SegUIVar", "Segoe UI"]
+    , sdlAppMonoFont = FontSearch ["Cascadia Mono", "Consolas"]
     , sdlAppFontSize = 18
     }
 

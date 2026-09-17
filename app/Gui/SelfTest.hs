@@ -273,7 +273,7 @@ selfTestSteps opts env cache dir = do
     click "All disks"
     expect "Unknown disk"
     shot "07-disks"
-    clickPrefixed "C:  ·"
+    clickPrefixed "C: ("
     expect " of "
     shot "08-disk-c"
 
@@ -299,6 +299,13 @@ selfTestSteps opts env cache dir = do
     clickPos frame base (V2 744 130)
     settle
     shot "09-sort"
+
+    step "empty list"
+    click "Search name, id, or publisher"
+    frame base {inputChars = "no app is called this"}
+    settle
+    expect "No apps match the search or filters."
+    shot "11-empty"
 
     putStrLn ("selftest: passed; screenshots in " <> dir)
     exitWith ExitSuccess
