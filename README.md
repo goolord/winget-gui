@@ -62,9 +62,9 @@ cabal run build -- package      # ...and zip it into release\
 cabal run build -- clean
 ```
 
-`dist\` holds four files -- the two stripped executables, `SDL3.dll` and
-`SDL3_ttf.dll` -- and nothing else is needed: copy it anywhere with App
-Installer (WinGet) present. Once `cabal run build` has produced the bridge and
+`dist\` holds four files: the two stripped executables, `SDL3.dll` and
+`SDL3_ttf.dll`. Nothing else is needed, so you can copy it to any machine with
+App Installer (WinGet). Once `cabal run build` has produced the bridge and
 fetched SDL, a plain `cabal build` works too, but it links against whatever
 SDL3 `pkg-config` finds on `PATH`; alternating between the two makes cabal
 reconfigure and rebuild `nano-ui-sdl` each time.

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>winget-gui</title>
-<meta name="description" content="A fast replacement for Windows' Installed apps page, with bulk and automated uninstallation.">
+<meta name="description" content="A faster Installed apps page for Windows, with bulk and automated uninstall.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#128230;</text></svg>">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <style>
@@ -21,7 +21,7 @@
   .download a[role="button"] { width: auto; padding-inline: 2.5rem; font-size: 1.05rem; }
   .meta { color: var(--pico-muted-color); font-size: 0.85rem; margin: 0; min-height: 1.2em; }
   figure { margin: 2.5rem 0; }
-  figure img { border-radius: var(--pico-border-radius); border: 1px solid var(--pico-muted-border-color); }
+  figure video { display: block; width: 100%; height: auto; border-radius: var(--pico-border-radius); border: 1px solid var(--pico-muted-border-color); }
   footer { text-align: center; color: var(--pico-muted-color); font-size: 0.85rem; padding-bottom: 3rem; }
 </style>
 </head>
@@ -29,8 +29,8 @@
 <main class="container">
   <hgroup>
     <h1>winget-gui</h1>
-    <p>A fast replacement for Windows&rsquo; <strong>Settings &rarr; Apps &rarr; Installed apps</strong>, built on
-       <a href="https://github.com/microsoft/winget-cli">WinGet</a>&rsquo;s COM API &mdash; with bulk and automated uninstallation.</p>
+    <p>A faster version of Windows&rsquo; <strong>Settings &rarr; Apps &rarr; Installed apps</strong> page, with bulk
+       and automated uninstall. It uses <a href="https://github.com/microsoft/winget-cli">WinGet</a>&rsquo;s COM API.</p>
   </hgroup>
 
   <div class="download">
@@ -39,23 +39,25 @@
   </div>
 
   <figure>
-    <img src="https://github.com/user-attachments/assets/4ebdc144-bd0b-419e-a92f-b2d5d78332eb"
-         alt="winget-gui showing the installed apps list" width="1562" height="1002">
+    <video src="https://github.com/user-attachments/assets/273b6a4b-a5d6-4e4c-a449-d92da5a5d568"
+           poster="https://github.com/user-attachments/assets/4ebdc144-bd0b-419e-a92f-b2d5d78332eb"
+           width="1568" height="964" autoplay muted loop playsinline controls
+           aria-label="winget-gui listing installed apps"></video>
   </figure>
 
   <ul>
-    <li><strong>Fast.</strong> The list appears as soon as WinGet&rsquo;s local catalog is read; upgrades fill in
-        afterwards in the background. 1,337 apps listed in 1.7&nbsp;s, against ~16.5&nbsp;s for Settings.</li>
-    <li><strong>Bulk operations.</strong> Check any number of apps and uninstall or upgrade them in one go,
-        silently or interactively, with a live queue you can stop, skip, and retry.</li>
-    <li><strong>Automation.</strong> Select apps by rule, save rule files, and run them headlessly with
+    <li>Lists 1,337 installed apps in 1.7&nbsp;s. Settings takes about 16.5&nbsp;s. Available upgrades
+        are checked in the background after the list loads.</li>
+    <li>Check as many apps as you want and uninstall or upgrade them together, silently or with each
+        installer&rsquo;s own window. The queue can be stopped, skipped, and retried.</li>
+    <li>Select apps with rules, save the rules to a file, and run the same file from
         <code>winget-gui-cli</code>.</li>
-    <li><strong>More detail than Settings.</strong> WinGet id, source, scope, installer type, architecture,
-        install location, product codes, disk usage per drive, and available upgrades.</li>
+    <li>Shows each app&rsquo;s WinGet id, source, scope, installer type, architecture, install location,
+        product codes, and available upgrade, plus disk usage per drive.</li>
   </ul>
 
-  <p>Unzip anywhere and run <code>winget-gui.exe</code>. Requires Windows with App Installer (WinGet) present;
-     the folder is self-contained. Source and build instructions are on
+  <p>Unzip anywhere and run <code>winget-gui.exe</code>. You need App Installer (WinGet), which comes with
+     Windows 11 and current Windows 10. Nothing else has to be installed. Source and build instructions are on
      <a href="https://github.com/goolord/winget-gui">GitHub</a>.</p>
 </main>
 <footer class="container">
@@ -77,10 +79,9 @@
     dl.textContent = 'Download ' + (rel.tag_name || '') + ' for Windows';
     const mb = (asset.size / 1048576).toFixed(1);
     const date = new Date(rel.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-    meta.textContent = asset.name + ' · ' + mb + ' MB · ' + date;
+    meta.textContent = asset.name + ', ' + mb + ' MB, ' + date;
   } catch {
-    meta.innerHTML = 'No release published yet &mdash; ' +
-      '<a href="https://github.com/goolord/winget-gui#building">build from source</a>.';
+    meta.innerHTML = 'No release yet. You can <a href="https://github.com/goolord/winget-gui#building">build it from source</a>.';
   }
 })();
 </script>
