@@ -5,7 +5,7 @@ remove programs"), built on [nano-ui](https://github.com/goolord/nano-ui) and
 the [WinGet](https://github.com/microsoft/winget-cli) COM API, with bulk and
 automated uninstallation.
 
-https://github.com/user-attachments/assets/273b6a4b-a5d6-4e4c-a449-d92da5a5d568
+https://github.com/user-attachments/assets/f6e9758e-5719-4f36-b16e-d1798976fa51
 
 
 - **Fast**: the installed list appears as soon as WinGet's local catalog is
@@ -30,7 +30,8 @@ https://github.com/user-attachments/assets/273b6a4b-a5d6-4e4c-a449-d92da5a5d568
   save and load rule files, and run the same files headlessly with
   `winget-gui-cli`.
 - **Disk view**: filter by the drive an app is installed on, with the number
-  of apps and the space they take on each drive.
+  of apps and the space they take on each drive. A bar beside each size shows
+  which apps take the most space; sort by size to see them first.
 - **More detail than Settings**: WinGet id, source, scope, installer type,
   architecture, install location, product codes, package family names,
   whether a silent uninstaller is registered, and available upgrades.
@@ -135,7 +136,11 @@ option (or pass `--accept-agreements`).
 ```powershell
 winget-gui --selftest <dir>          # scripted clicks through every dialog; saves screenshots
 winget-gui --screenshot main.bmp     # render the main window headlessly
+winget-gui --demo <dir>              # render the README demo as numbered frames (a dry run)
 $env:WINGET_GUI_TIMING = 1           # bridge prints listing phase timings to stderr
 ```
 
 The self-test never starts an operation: it only opens and cancels dialogs.
+The demo runs its uninstall as a dry run: the jobs are queued and advanced by
+the script, and nothing reaches WinGet. Encode the frames with
+`ffmpeg -framerate 30 -i f%05d.bmp -c:v libx264 -pix_fmt yuv420p demo.mp4`.
