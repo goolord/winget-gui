@@ -198,6 +198,7 @@ main = do
       putInfo "Building the GUI and the CLI (cabal)..."
       command_ withPkgConfig cabal ("build" : ["exe:" <> name | name <- executables])
       strip <- liftIO $ firstExecutable ["llvm-strip", "strip"]
+      upx <- liftIO $ Dir.findExecutable "upx"
       forM_ (zip outs binPaths) $ \(out, binPath) -> do
         liftIO $ Dir.copyFile binPath out
         -- GHC executables carry full symbol tables. Strip the staged copies
@@ -205,6 +206,14 @@ main = do
         case strip of
           Just prog -> command_ [] prog ["--strip-all", out]
           Nothing -> putWarn ("Neither llvm-strip nor strip is on PATH; " <> out <> " is unstripped.")
+        -- Then pack them, which takes the CLI from about 19 MB to under 4. UPX
+        -- keeps a stub import for every DLL the original named, so checkDist
+        -- still sees the real dependencies.
+        case upx of
+          Just prog -> do
+            putInfo ("Packing " <> out <> " (upx)...")
+            command_ [] prog ["--best", "--no-progress", "-q", out]
+          Nothing -> putWarn ("upx is not on PATH; " <> out <> " is unpacked.")
 
     forM_ sdlPackages $ \pkg -> do
       distDir </> sdlDll pkg %> \out -> do

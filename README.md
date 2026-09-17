@@ -50,7 +50,7 @@ https://github.com/user-attachments/assets/273b6a4b-a5d6-4e4c-a449-d92da5a5d568
 ## Building
 
 Requirements: GHC 9.14 and cabal, Rust with `rustup`, `pkg-config`, and LLVM's
-binutils (`llvm-readobj`, `llvm-strip`) on `PATH`. nano-ui is fetched from
+binutils (`llvm-readobj`, `llvm-strip`) and `upx` on `PATH`. nano-ui is fetched from
 GitHub at the commit pinned in `cabal.project`; SDL3 and SDL3_ttf are fetched
 and checksummed by the build itself.
 
