@@ -5,7 +5,7 @@ remove programs"), built on [nano-ui](https://github.com/goolord/nano-ui) and
 the [WinGet](https://github.com/microsoft/winget-cli) COM API, with bulk and
 automated uninstallation.
 
-https://github.com/user-attachments/assets/f6e9758e-5719-4f36-b16e-d1798976fa51
+[![winget-gui sorting installed apps by size, filtering by disk, and queueing an uninstall. Click to play the video.](https://files.catbox.moe/tmj3ao.png)](https://files.catbox.moe/jni2mj.mp4)
 
 
 - **Fast**: the installed list appears as soon as WinGet's local catalog is
