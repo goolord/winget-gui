@@ -4,7 +4,7 @@ packages: . build/
 source-repository-package
   type: git
   location: https://github.com/goolord/nano-ui
-  tag: b9f26549d93671c50aaf6f3e8768cbeaed434668
+  tag: 4d75577f4d2b5a8f150e05f6f200c89e0cb369db
   subdir: packages/nano-ui packages/nano-ui-sdl
 
 package nano-ui-sdl

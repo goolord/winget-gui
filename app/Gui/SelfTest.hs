@@ -31,9 +31,9 @@ import GHC.Clock (getMonotonicTime)
 import Gui.State
 import Gui.View (ViewCache, appView, rowH)
 import NanoUI (Color, Input (..), Key (..), Modifiers (..), Rect (..), V2 (..), emptyInput, inputKeysFromList)
-import NanoUI.Backend.Sdl (SdlEnv, SdlOptions (..), newSdlContext, saveScreenshot, sdlDrawFrame, withSdl)
+import NanoUI.Backend.Sdl (SdlEnv, SdlOptions (..), saveScreenshot, sdlDrawFrame, withSdl)
 import NanoUI.Context (Context)
-import NanoUI.Testing (collectOverlayTextSpans, collectTextSpans, withTheme)
+import NanoUI.Testing (collectOverlayTextSpans, collectTextSpans, newPixelContext, withTheme)
 import NanoUI.Testing.Harness (clickPos, findExact, hasText, requireSpan)
 import System.Exit (ExitCode (..), exitSuccess, exitWith)
 import System.IO (hFlush, hPutStrLn, stderr)
@@ -65,7 +65,7 @@ data Headless = Headless
 headless :: SdlOptions -> Env -> ViewCache -> (Headless -> IO a) -> IO a
 headless opts env cache k = do
   -- Apply the app theme as runSdlApp does, so screenshots match the real window.
-  ctx0 <- newSdlContext >>= \c -> maybe (pure c) (withTheme c) (sdlAppTheme opts)
+  ctx0 <- newPixelContext >>= \c -> maybe (pure c) (withTheme c) (sdlAppTheme opts)
   withSdl opts {sdlWindowHidden = True, sdlWindowResizable = False} ctx0 $ \ctx sdlEnv -> do
     let base = emptyInput {inputWindowSize = sdlWindowSize opts, inputMousePos = V2 (-1) (-1)}
         frame forceFull inp = void (sdlDrawFrame ctx (appView env cache) sdlEnv inp forceFull)
