@@ -12,11 +12,14 @@ module Gui.State
   , PendingBatch (..)
   , ViewKey (..)
   , newEnv
+  , newDryRunEnv
   , readState
   , modifyState
   , startupLoad
   , refresh
   , startBatch
+  , reportJob
+  , endDryRunBatch
   , stopBatches
   , cancelJob
   , retryFailed
@@ -30,7 +33,7 @@ module Gui.State
 where
 
 import Control.Concurrent (forkIO)
-import Control.Monad (forM_, join, void, when)
+import Control.Monad (forM_, join, unless, void, when)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.List (sortOn)
 import Data.Maybe (isJust, mapMaybe)
@@ -105,10 +108,20 @@ data Env = Env
   { envState :: !(IORef AppState)
   , envWake :: !(IORef (IO ()))
   -- ^ Wakes the event loop; installed by the view on its first frame.
+  , envDryRun :: !Bool
+  -- ^ Queue operations without running them: the demo recording advances
+  -- the jobs itself, so nothing is ever uninstalled or upgraded.
   }
 
 newEnv :: IO Env
-newEnv =
+newEnv = newEnvWith False
+
+-- | An environment whose operations are only queued, never run. See 'envDryRun'.
+newDryRunEnv :: IO Env
+newDryRunEnv = newEnvWith True
+
+newEnvWith :: Bool -> IO Env
+newEnvWith dryRun =
   Env
     <$> newIORef
       AppState
@@ -127,6 +140,7 @@ newEnv =
         , stSkipped = Set.empty
         }
     <*> newIORef (pure ())
+    <*> pure dryRun
 
 readState :: Env -> IO AppState
 readState = readIORef . envState
@@ -218,7 +232,8 @@ startBatch env kind flags workers requested = do
         { stJobs = stJobs s <> V.fromList [JobView j JobPending | j <- jobs]
         , stSelected = foldr (Set.delete . pkgId) (stSelected s) pkgs
         }
-    void . forkIO $ do
+    -- A dry run stops here: the jobs stay queued for whoever drives them.
+    unless (envDryRun env) . void . forkIO $ do
       let skip job = Set.member (jobToken job) . stSkipped <$> readState env
       runJobs workers snap skip (report env) jobs
       (release, recheck) <- atomicModifyIORef' (envState env) $ \s ->
@@ -230,6 +245,15 @@ startBatch env kind flags workers requested = do
       notify env
       -- Pick up anything the installers changed beyond what the results say.
       refresh env recheck
+
+-- | Record a job's new status, as the queue reports it. A dry run's driver
+-- calls this too.
+reportJob :: Env -> Job -> JobStatus -> IO ()
+reportJob = report
+
+-- | Mark a dry-run batch finished once its driver has settled every job.
+endDryRunBatch :: Env -> IO ()
+endDryRunBatch env = modifyState env (\s -> s {stActiveBatches = max 0 (stActiveBatches s - 1)})
 
 report :: Env -> Job -> JobStatus -> IO ()
 report env job status = modifyState env $ \s ->
@@ -256,13 +280,13 @@ stopBatches env = do
     let jobs = [jvJob jv | jv <- V.toList (stJobs s), not (jobIsFinished (jvStatus jv))]
      in (s {stSkipped = foldr (Set.insert . jobToken) (stSkipped s) jobs}, jobs)
   notify env
-  void . forkIO $ forM_ open (void . cancelOperation . jobToken)
+  unless (envDryRun env) . void . forkIO $ forM_ open (void . cancelOperation . jobToken)
 
 -- | Cancel one job: skip it if waiting, or ask WinGet to cancel it if running.
 cancelJob :: Env -> Job -> IO ()
 cancelJob env job = do
   modifyState env (\s -> s {stSkipped = Set.insert (jobToken job) (stSkipped s)})
-  void . forkIO . void $ cancelOperation (jobToken job)
+  unless (envDryRun env) . void . forkIO . void $ cancelOperation (jobToken job)
 
 -- | Re-queue failed jobs with their original options. Jobs the user skipped or
 -- cancelled stay as they are.

@@ -10,6 +10,10 @@
 module Gui.SelfTest
   ( screenshot
   , selfTest
+  , Headless (..)
+  , headless
+  , waitForList
+  , uiSpans
   )
 where
 
@@ -26,7 +30,7 @@ import Data.Vector qualified as V
 import GHC.Clock (getMonotonicTime)
 import Gui.State
 import Gui.View (ViewCache, appView, rowH)
-import NanoUI (Input (..), Key (..), Modifiers (..), Rect (..), V2 (..), emptyInput, inputKeysFromList)
+import NanoUI (Color, Input (..), Key (..), Modifiers (..), Rect (..), V2 (..), emptyInput, inputKeysFromList)
 import NanoUI.Backend.Sdl (SdlEnv, SdlOptions (..), newSdlContext, saveScreenshot, sdlDrawFrame, withSdl)
 import NanoUI.Context (Context)
 import NanoUI.Testing (collectOverlayTextSpans, collectTextSpans, withTheme)
@@ -52,6 +56,8 @@ data Headless = Headless
   { hCtx :: Context
   , hEnv :: SdlEnv
   , hFrame :: Input -> IO ()
+  , hDraw :: Bool -> Input -> IO ()
+  -- ^ A frame, repainted in full when asked.
   , hBase :: Input
   , hSave :: FilePath -> IO ()
   }
@@ -68,7 +74,11 @@ headless opts env cache k = do
           frame True base
           saved <- saveScreenshot sdlEnv path
           unless saved $ fail ("could not save " <> path)
-    k Headless {hCtx = ctx, hEnv = sdlEnv, hFrame = frame False, hBase = base, hSave = save}
+    k Headless {hCtx = ctx, hEnv = sdlEnv, hFrame = frame False, hDraw = frame, hBase = base, hSave = save}
+
+-- | Text on screen in both layers: the window and its dialogs and drop-downs.
+uiSpans :: Headless -> IO [(Rect, Text, Color, Color, Rect)]
+uiSpans h = (<>) <$> collectTextSpans (hCtx h) <*> collectOverlayTextSpans (hCtx h) (hBase h)
 
 selectFirst :: Env -> Int -> IO ()
 selectFirst env n =

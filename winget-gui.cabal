@@ -46,12 +46,14 @@ executable winget-gui
     main-is:          Main.hs
     hs-source-dirs:   app
     other-modules:
+        Gui.Demo
         Gui.SelfTest
         Gui.State
         Gui.Style
         Gui.View
     build-depends:
         base,
+        bytestring,
         containers,
         nano-ui,
         nano-ui-sdl,

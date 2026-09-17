@@ -1,9 +1,10 @@
 module Main (main) where
 
+import Gui.Demo (demo)
 import Gui.SelfTest (screenshot, selfTest)
-import Gui.State (newEnv, startupLoad)
+import Gui.State (Env, newDryRunEnv, newEnv, startupLoad)
 import Gui.Style (appTheme)
-import Gui.View (appView, newViewCache)
+import Gui.View (ViewCache, appView, newViewCache)
 import NanoUI (Size (..))
 import NanoUI.Backend.Sdl (NanoUIFont (..), SdlOptions (..), defaultSdlOptions, runSdlApp)
 import System.Environment (getArgs)
@@ -28,8 +29,18 @@ main = do
   -- Keep progress lines even if a headless run dies before flushing.
   hSetBuffering stdout LineBuffering
   args <- getArgs
-  env <- newEnv
   cache <- newViewCache
+  case args of
+    -- The demo video: operations are only queued, never run, and it checks
+    -- for updates so rows offer upgrades.
+    ["--demo", dir] -> do
+      env <- newDryRunEnv
+      startupLoad env True
+      demo windowOptions env cache dir
+    _ -> newEnv >>= \env -> run env cache args
+
+run :: Env -> ViewCache -> [String] -> IO ()
+run env cache args =
   case args of
     -- Headless modes skip the update check so the list stays put while they run.
     ["--screenshot", path] -> startupLoad env False >> screenshot windowOptions env cache path 0
