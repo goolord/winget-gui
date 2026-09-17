@@ -15,7 +15,9 @@
     --pico-primary-inverse: #fff;
     --pico-border-radius: 0.5rem;
   }
-  body > main { padding-block: 4rem; max-width: 46rem; }
+  /* .container in the selector: Pico's own .container widths are more
+     specific than body > main, and win on wide screens otherwise. */
+  body > main.container { padding-block: 4rem; max-width: 46rem; }
   hgroup > h1 { margin-bottom: 0.25rem; font-size: clamp(2.2rem, 7vw, 3rem); }
   .download { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; margin: 2.5rem 0; }
   .download a[role="button"] { width: auto; padding-inline: 2.5rem; font-size: 1.05rem; }
