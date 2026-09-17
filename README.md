@@ -120,6 +120,12 @@ is copied to `%LOCALAPPDATA%\winget-gui\inproc\<App Installer version>\` and
 loaded from there. Uninstallers therefore run as children of winget-gui, and
 installers that need administrator rights show their own UAC prompt.
 
+The module links against the Visual C++ runtime, which App Installer gets from
+its `Microsoft.VCLibs.140.00.UWPDesktop` framework package. An unpackaged
+process does not see that package, so the runtime DLLs are copied from it into
+the same folder. That way winget-gui does not need the Visual C++
+Redistributable, and it uses the same runtime version as WinGet.
+
 Sources whose agreements you have not accepted are skipped when checking for
 upgrades, and package license agreements are only accepted when you tick the
 option (or pass `--accept-agreements`).

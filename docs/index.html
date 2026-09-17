@@ -34,7 +34,7 @@
   </hgroup>
 
   <div class="download">
-    <a id="dl" role="button" href="https://github.com/goolord/winget-gui/releases/latest">Download for Windows</a>
+    <a id="dl" role="button" href="https://github.com/goolord/winget-gui/releases">Download for Windows</a>
     <p class="meta" id="meta"></p>
   </div>
 
@@ -66,9 +66,11 @@
 (async () => {
   const dl = document.getElementById('dl'), meta = document.getElementById('meta');
   try {
-    const r = await fetch('https://api.github.com/repos/goolord/winget-gui/releases/latest');
+    // Not /releases/latest, which skips pre-releases.
+    const r = await fetch('https://api.github.com/repos/goolord/winget-gui/releases?per_page=1');
     if (!r.ok) throw new Error(r.status);
-    const rel = await r.json();
+    const [rel] = await r.json();
+    if (!rel) throw new Error('no releases');
     const asset = rel.assets.find(a => /\.(zip|msi|exe)$/i.test(a.name)) || rel.assets[0];
     if (!asset) throw new Error('no assets');
     dl.href = asset.browser_download_url;
