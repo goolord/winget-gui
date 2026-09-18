@@ -549,10 +549,8 @@ packageRow RowLook {..} p =
       | rowHovered = palRowHover palette
       | odd rowIndex = palStripe palette
       | otherwise = palBackground palette
-    -- The name and id fill the cell and cut off with an ellipsis, so they add
-    -- nothing to the row's natural width. Otherwise a long name widens the
-    -- list, which scrolls sideways, and the bar comes and goes as rows with
-    -- long names are built and dropped.
+    -- The name and id fill the cell and end in an ellipsis where the cell is
+    -- too narrow for them, rather than running into the publisher column.
     nameCell =
       columnWith (grow . minW 220 . gap 3 . alignMid . nameBlockNudge . cellPad . tight) $ do
         nameLine (tight . fontMedium . inkColor palText) (ellipsize 64 (pkgName p))
