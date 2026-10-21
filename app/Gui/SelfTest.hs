@@ -30,11 +30,11 @@ import Data.Vector qualified as V
 import GHC.Clock (getMonotonicTime)
 import Gui.State
 import Gui.View (ViewCache, appView, rowH)
-import NanoUI (Color, Input (..), Key (..), Modifiers (..), Rect (..), V2 (..), emptyInput, inputKeysFromList)
+import NanoUI (Color, Input (..), Key (..), Modifiers (..), Rect (..), V2 (..), WindowMode (..), WindowSettings (..))
+import NanoUI.Backend (emptyInput)
 import NanoUI.Backend.Sdl (SdlEnv, SdlOptions (..), saveScreenshot, sdlDrawFrame, withSdl)
-import NanoUI.Context (Context)
-import NanoUI.Testing (collectOverlayTextSpans, collectTextSpans, newPixelContext, withTheme)
-import NanoUI.Testing.Harness (clickPos, findExact, hasText, requireSpan)
+import NanoUI.Testing (Context, collectOverlayTextSpans, collectTextSpans, newPixelContext, withTheme)
+import NanoUI.Testing.Harness (clickPos, findExact, hasText, keyInp, requireSpan)
 import System.Exit (ExitCode (..), exitSuccess, exitWith)
 import System.IO (hFlush, hPutStrLn, stderr)
 import WinGet.Bridge
@@ -66,8 +66,9 @@ headless :: SdlOptions -> Env -> ViewCache -> (Headless -> IO a) -> IO a
 headless opts env cache k = do
   -- Apply the app theme as runSdlApp does, so screenshots match the real window.
   ctx0 <- newPixelContext >>= \c -> maybe (pure c) (withTheme c) (sdlAppTheme opts)
-  withSdl opts {sdlWindowHidden = True, sdlWindowResizable = False} ctx0 $ \ctx sdlEnv -> do
-    let base = emptyInput {inputWindowSize = sdlWindowSize opts, inputMousePos = V2 (-1) (-1)}
+  let ws = (sdlWindowSettings opts) {wsMode = Hidden, wsResizable = False}
+  withSdl opts {sdlWindowSettings = ws} ctx0 $ \ctx sdlEnv -> do
+    let base = emptyInput {inputWindowSize = wsSize ws, inputMousePos = V2 (-1) (-1)}
         frame forceFull inp = void (sdlDrawFrame ctx (appView env cache) sdlEnv inp forceFull)
         save path = do
           replicateM_ 2 (frame False base)
@@ -118,7 +119,7 @@ selfTestSteps opts env cache dir = do
         settle = replicateM_ 3 (frame base)
         step name = putStrLn ("selftest: " <> name)
         shot name = hSave h (dir <> "\\" <> name <> ".bmp")
-        press key = frame base {inputKeys = inputKeysFromList [key]} >> settle
+        press key = frame (keyInp key base) >> settle
         -- Dialogs and drop-downs draw into the overlay layer, so look at both layers.
         spans = (<>) <$> collectTextSpans (hCtx h) <*> collectOverlayTextSpans (hCtx h) base
         center (Rect x y w hgt) = V2 (x + w / 2) (y + hgt / 2)

@@ -32,12 +32,14 @@ module Gui.Style
 where
 
 import Control.Monad (unless, void, when)
+import Data.ByteString (ByteString)
 import Data.Char (ord)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import NanoUI
-import NanoUI.Testing (UiCursorKind (..))
+import Data.Word (Word64)
+import NanoUI hiding (FontMetrics)
+import NanoUI.Backend (FontMetrics (..), GlyphQuad (..), ShapedText (..), mix64)
 
 data Palette = Palette
   { palBackground :: !Color
@@ -112,6 +114,7 @@ appTheme =
       -- containers with the panel colour, which would otherwise show as a box
       -- inside the dialog.
       themeFloatingWindow = style (palSurface p) (palBorder p) (palSurface p) (palSurface p) 12
+    , themePopup = style (palSurface p) (palBorder p) (palSurface p) (palSurface p) 12
     , themeButton = style (palElevated p) (palBorder p) (palHover p) (palPressed p) 6
     , themeInput = style (palBackground p) (palBorder p) (palStripe p) (palBackground p) 6
     , themeSeparator = palSeparator p
@@ -123,6 +126,9 @@ appTheme =
     , themeGreen = palGreen p
     , -- The app draws nothing in purple; keep nano-ui's purple slot neutral.
       themePurple = palTextMuted p
+    , themeSuccess = palGreen p
+    , themeWarning = palYellow p
+    , themeDanger = palRed p
     , themeOverlayDim = colorRGBA 0 0 0 160
     , themeOnAccent = palOnAccent p
     , themeSelection = let c = palAccent p in colorRGBA (colorR c) (colorG c) (colorB c) 84
@@ -142,6 +148,7 @@ appTheme =
         , styleCornerRadius = radius
         , styleHoverBg = hover
         , styleActiveBg = active
+        , styleBorderSides = 15
         }
 
 -- | Buttons with no fill or border until hovered, in the muted text colour:
@@ -193,7 +200,7 @@ rowButton txt = do
         { widgetLayout = (fixedWH (fromIntegral (ceiling (inkEnd - inkStart + 28) :: Int)) 30 . alignMid) defaultLayout
         , widgetContent =
             drawKey txt [styleBg s, styleFg s, styleBorder s, styleHoverBg s, styleActiveBg s] [styleCornerRadius s, styleBorderWidth s]
-        , widgetDraw = \dc r -> runCanvas $ do
+        , widgetDraw = \dc r -> runCanvasFor dc $ do
             let f = cdcFont dc
                 st = themeButton (cdcTheme dc)
                 fill
@@ -213,7 +220,7 @@ rowButton txt = do
             when (bw > 0) $ drawRoundedRect r radius (styleBorder st)
             drawRoundedRect (Rect (rectX r + bw) (rectY r + bw) (rectW r - 2 * bw) (rectH r - 2 * bw)) (max 0 (radius - bw)) fill
             drawText (V2 penX lineTop) AlignStart AlignTop txt (styleFg st)
-        , widgetCursor = Just (const UiCursorPointer)
+        , widgetCursor = Just (\_ _ _ -> UiCursorPointer)
         }
   pure (respClicked resp)
 
@@ -243,7 +250,7 @@ icon :: Float -> Color -> Svg -> NanoUI ()
 icon size color = svgIconWith (fixedWH size size . alignMid . fontColor color)
 
 -- Stroked on a 24px grid in currentColor, so one raster serves every tint.
-svg :: Text -> Svg
+svg :: ByteString -> Svg
 svg body =
   either (error . ("Gui.Style: bad icon: " <>)) id . parseSvg $
     "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">"
@@ -287,7 +294,7 @@ cellPadEnd layout = layout {layoutPadding = (layoutPadding layout) {padR = cellI
 -- 'contentKey' hashes the numbers; 'mix64' folds in the colours and the text.
 drawKey :: Text -> [Color] -> [Float] -> Int
 drawKey txt colors numbers =
-  let seed = fromIntegral (contentKey numbers)
+  let seed = fromIntegral (contentKey numbers) :: Word64
       withColors = foldl' (\acc c -> mix64 acc (fromIntegral (colorToWord32 c))) seed colors
       key = fromIntegral (T.foldl' (\acc ch -> mix64 acc (fromIntegral (ord ch))) withColors txt)
    in if key == 0 then 1 else key
@@ -309,7 +316,7 @@ headerCell sizing align title sortState sortable = do
       defaultCustomWidgetSpec
         { widgetLayout = (sizing . fixedH 34 . alignMid) defaultLayout
         , widgetContent = drawKey title [] flags
-        , widgetDraw = \dc r -> runCanvas $ do
+        , widgetDraw = \dc r -> runCanvasFor dc $ do
             let hovered = sortable && cdcHovered dc
                 pressed = sortable && cdcPressed dc
                 caption = title <> maybe "" (\desc -> if desc then "  ↓" else "  ↑") sortState
@@ -323,7 +330,7 @@ headerCell sizing align title sortState sortable = do
             case align of
               HeaderStart -> drawText (V2 (rectX r + cellInset) y) AlignStart AlignMiddle caption fg
               HeaderEnd -> drawText (V2 (rectX r + rectW r - cellInset) y) AlignEnd AlignMiddle caption fg
-        , widgetCursor = if sortable then Just (const UiCursorPointer) else Nothing
+        , widgetCursor = if sortable then Just (\_ _ _ -> UiCursorPointer) else Nothing
         }
   pure (sortable && respClicked resp)
 
@@ -337,7 +344,7 @@ sizeCell width txt share =
       defaultCustomWidgetSpec
         { widgetLayout = (fixedW width . fillH . alignMid) defaultLayout
         , widgetContent = drawKey txt [] [share]
-        , widgetDraw = \_ r -> runCanvas $
+        , widgetDraw = \dc r -> runCanvasFor dc $
             unless (T.null txt) $ do
               let x0 = rectX r + cellInset
                   x1 = rectX r + rectW r - cellInset

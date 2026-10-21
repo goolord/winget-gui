@@ -31,21 +31,26 @@ import Data.Word (Word64)
 import Gui.State
 import Gui.Style
 import NanoUI
+import NanoUI.Backend (ScrollBarSlot (..), scrollBarGutter)
 import NanoUI.Backend.Sdl (FileDialogId, FileDialogResult (..), askOpenFileDialog, askSaveFileDialog, defaultFileDialogOptions, pollFileDialogUi)
-import NanoUI.Context (Context (..))
-import NanoUI.Monad (askContext, askInput)
-import NanoUI.Store (anySelectOpen)
-import NanoUI.Testing (floatingPanelActive, getStore, textFieldActive)
+import NanoUI.Internal.Context (Context (..))
+import NanoUI.Internal.Store (anySelectOpen)
+import NanoUI.Testing (askContext, floatingPanelActive, getStore, textFieldActive)
+
 import System.Process (spawnProcess)
 import WinGet.Bridge
 import WinGet.Queue
 import WinGet.Select
 
+uiIO :: IO a -> NanoUI a
+uiIO = liftIO
+
 --------------------------------------------------------------------------------
 -- Caches kept between frames
 
 data ViewCache = ViewCache
-  { vcVisible :: !(IORef (Maybe (ViewKey, Vector Package)))
+  { vcVars :: !Vars
+  , vcVisible :: !(IORef (Maybe (ViewKey, Vector Package)))
   , vcDisks :: !(IORef (Maybe (Int, [DiskStat])))
   , vcListWid :: !(IORef (Maybe WidgetId))
   , vcDialog :: !(IORef (Maybe (DialogPurpose, FileDialogId)))
@@ -60,6 +65,23 @@ data DialogPurpose = LoadRules | SaveRules
 
 newViewCache :: IO ViewCache
 newViewCache = do
+  query <- newVar ""
+  kindFilter <- newVar FilterAll
+  sortKey <- newVar SortName
+  sortDesc <- newVar False
+  anchor <- newVar Nothing
+  pending <- newVar Nothing
+  details <- newVar Nothing
+  rulesOpen <- newVar False
+  rulesText <- newVar ""
+  installerUi <- newVar InstallerSilent
+  force <- newVar False
+  acceptAgreements <- newVar False
+  parallelIx <- newVar 0
+  notice <- newVar Nothing
+  pressedRow <- newVar Nothing
+  diskChoice <- newVar Nothing
+  let vcVars = Vars {..}
   vcVisible <- newIORef Nothing
   vcDisks <- newIORef Nothing
   vcListWid <- newIORef Nothing
@@ -78,19 +100,8 @@ cached ref key value =
 --------------------------------------------------------------------------------
 -- One frame's inputs
 
--- | A piece of the view's own state: its value this frame, and its setter.
-data Var a = Var
-  { val :: !a
-  , put :: a -> NanoUI ()
-  }
-
-var :: NanoUI (a, a -> NanoUI ()) -> NanoUI (Var a)
-var hook = uncurry Var <$> hook
-
--- | Show a control for a variable and keep what it returns. Setting the value
--- a variable already has does nothing.
-bind :: Var a -> (a -> NanoUI a) -> NanoUI ()
-bind v control = control (val v) >>= put v
+put :: Eq a => Var a -> a -> NanoUI ()
+put = writeVar
 
 -- | The view's own state, which nano-ui keeps between frames.
 data Vars = Vars
@@ -119,25 +130,44 @@ data Vars = Vars
   -- ^ The disk picked in the menu, which may since have lost all its apps.
   }
 
-useVars :: NanoUI Vars
-useVars = do
-  query <- var (useText "")
-  kindFilter <- var (useState FilterAll)
-  sortKey <- var (useState SortName)
-  sortDesc <- var (useFlag False)
-  anchor <- var (useState Nothing)
-  pending <- var (useState Nothing)
-  details <- var (useState Nothing)
-  rulesOpen <- var (useFlag False)
-  rulesText <- var (useText "")
-  installerUi <- var (useEnum InstallerSilent)
-  force <- var (useFlag False)
-  acceptAgreements <- var (useFlag False)
-  parallelIx <- var (useInt 0)
-  notice <- var (useState Nothing)
-  pressedRow <- var (useState Nothing)
-  diskChoice <- var (useState Nothing)
-  pure Vars {..}
+data Snapshot = Snapshot
+  { snapQuery :: !Text
+  , snapKindFilter :: !Filter
+  , snapSortKey :: !SortKey
+  , snapSortDesc :: !Bool
+  , snapAnchor :: !(Maybe Text)
+  , snapPending :: !(Maybe PendingBatch)
+  , snapDetails :: !(Maybe Text)
+  , snapRulesOpen :: !Bool
+  , snapRulesText :: !Text
+  , snapInstallerUi :: !InstallerUi
+  , snapForce :: !Bool
+  , snapAcceptAgreements :: !Bool
+  , snapParallelIx :: !Int
+  , snapNotice :: !(Maybe Text)
+  , snapPressedRow :: !(Maybe Text)
+  , snapDiskChoice :: !(Maybe Text)
+  }
+
+readSnapshot :: Vars -> IO Snapshot
+readSnapshot Vars {..} = do
+  snapQuery <- readVarIO query
+  snapKindFilter <- readVarIO kindFilter
+  snapSortKey <- readVarIO sortKey
+  snapSortDesc <- readVarIO sortDesc
+  snapAnchor <- readVarIO anchor
+  snapPending <- readVarIO pending
+  snapDetails <- readVarIO details
+  snapRulesOpen <- readVarIO rulesOpen
+  snapRulesText <- readVarIO rulesText
+  snapInstallerUi <- readVarIO installerUi
+  snapForce <- readVarIO force
+  snapAcceptAgreements <- readVarIO acceptAgreements
+  snapParallelIx <- readVarIO parallelIx
+  snapNotice <- readVarIO notice
+  snapPressedRow <- readVarIO pressedRow
+  snapDiskChoice <- readVarIO diskChoice
+  pure Snapshot {..}
 
 -- | Everything the parts of one frame read.
 data Frame = Frame
@@ -147,6 +177,7 @@ data Frame = Frame
   , inp :: Input
   , st :: AppState
   , vars :: Vars
+  , snap :: Snapshot
   , disks :: [DiskStat]
   , disk :: Maybe Text
   -- ^ The disk filter in effect.
@@ -161,11 +192,12 @@ data Frame = Frame
   }
 
 prepareFrame :: Env -> ViewCache -> Context -> Input -> AppState -> Vars -> IO Frame
-prepareFrame env cache ctx inp st vars@Vars {..} = do
+prepareFrame env cache ctx inp st vars = do
+  snap <- readSnapshot vars
   disks <- cached (vcDisks cache) (stRevision st) (diskStats (stPackages st))
   -- A chosen disk that no longer has apps (after a refresh) falls back to all.
-  let disk = mfilter (\d -> any ((== d) . dsDrive) disks) (val diskChoice)
-      (q, filt, key, desc) = (val query, val kindFilter, val sortKey, val sortDesc)
+  let disk = mfilter (\d -> any ((== d) . dsDrive) disks) (snapDiskChoice snap)
+      (q, filt, key, desc) = (snapQuery snap, snapKindFilter snap, snapSortKey snap, snapSortDesc snap)
   visible <-
     cached (vcVisible cache) (ViewKey (stRevision st) q filt disk key desc) $
       visiblePackages st q filt disk key desc
@@ -176,7 +208,7 @@ prepareFrame env cache ctx inp st vars@Vars {..} = do
       { visibleIds = Set.fromList (V.toList (V.map pkgId visible))
       , selectedPackages = V.toList (V.filter ((`Set.member` stSelected st) . pkgId) (stPackages st))
       , busy = Set.fromList [pkgId (jobPackage (jvJob jv)) | jv <- V.toList (stJobs st), not (jobIsFinished (jvStatus jv))]
-      , anyModal = isJust (val pending) || isJust (val details) || val rulesOpen
+      , anyModal = isJust (snapPending snap) || isJust (snapDetails snap) || snapRulesOpen snap
       , geom = listGeometry listWid metrics (V.length visible)
       , ..
       }
@@ -202,11 +234,12 @@ appView :: Env -> ViewCache -> NanoUI ()
 appView env cache = do
   ctx <- askContext
   inp <- askInput
+  wake <- askWake
   uiIO $ do
-    readIORef (ctxWakeLoop ctx) >>= mapM_ (writeIORef (envWake env))
+    writeIORef (envWake env) wake
     tuneScrollingOnce ctx cache
   st <- uiIO (readState env)
-  vars <- useVars
+  let vars = vcVars cache
   frame <- uiIO (prepareFrame env cache ctx inp st vars)
 
   columnWith (fillW . fillH . gap 0 . tight) $ do
@@ -248,18 +281,22 @@ topBar Frame {vars = Vars {..}, ..} =
   rowWith (fillW . padXY 16 12 . gap 10 . alignMid . tight) $ do
     labelWith (tight . alignMid . fontSemiBold . fontSize 24 . inkColor palText) "Installed apps"
     spacer (Fixed 12) Fit
-    bind query (rowWith (tight . fixedW 320) . searchField "Search name, id, or publisher")
+    searchInputConfigured
+      defaultSearchInputConfig
+        { sicPlaceholder = "Search name, id, or publisher"
+        , sicLayout = (tight . fixedW 320) defaultLayout
+        }
+      query
     fm <- uiFontMetrics
     -- Size each drop-down to its longest option (plus insets and the arrow),
     -- so no option runs past the menu at any font size.
     let fitted options = fixedW (max 160 (maximum (0 : map (lineWidth fm) options) + 56))
-        kindOptions = enumLabels filterLabel
         diskOptions = "All disks" : map diskLabel disks
         diskIx = diskIndex disks disk
-    enumMenu (fitted kindOptions) kindOptions kindFilter
+    enumMenu (fitted (enumLabels filterLabel)) filterLabel kindFilter
     -- Compared with the menu, not stored outright: a choice that has lost its
     -- apps shows as all disks, and comes back if they do.
-    d <- selectWith (fitted diskOptions) diskOptions diskIx
+    (_, d) <- withValue diskIx (selectWith (fitted diskOptions) diskOptions)
     when (d /= diskIx) $ put diskChoice (diskAt disks d)
     flex
     whenM (actionButton "Select by rule…") (put rulesOpen True)
@@ -313,8 +350,8 @@ loadStatus Frame {..}
     ms = round (stLoadSeconds st * 1000) :: Int
 
 noticeMessage :: Frame -> NanoUI ()
-noticeMessage Frame {vars = Vars {..}} =
-  forM_ (val notice) $ \msg -> do
+noticeMessage Frame {vars = Vars {..}, snap = Snapshot {..}} =
+  forM_ snapNotice $ \msg -> do
     icon 16 (palYellow palette) iconAlert
     statusLabel (inkColor palYellow) (ellipsize 80 msg)
     styled quiet $ whenM (compactButton "Dismiss") (put notice Nothing)
@@ -342,11 +379,11 @@ selectionActions frame@Frame {..} = do
 -- reserves room for its scrollbar, and the header gives up the same width so
 -- its cells stay over their columns.
 columnHeaders :: Frame -> NanoUI ()
-columnHeaders frame@Frame {vars = Vars {..}, ..} =
+columnHeaders frame@Frame {vars = Vars {..}, snap = Snapshot {..}, ..} =
   rowWith (fillW . fixedH 46 . gap 10 . alignMid . padLR (14 + listInset) (14 + lgRightInset geom) . tight) $ do
-    toggled <- rowWith (alignMid . tight) (checkbox "" allShown)
-    when (toggled /= allShown) $
-      setSelection frame (if toggled then Set.union visibleIds else (`Set.difference` visibleIds))
+    allShownResp <- checkboxWith' (alignMid . tight) "" (constVar allShown)
+    when (respClicked allShownResp) $
+      setSelection frame (if not allShown then Set.union visibleIds else (`Set.difference` visibleIds))
     sortable SortName (grow . minW 220) HeaderStart "Name"
     sortable SortPublisher (fixedW publisherW) HeaderStart "Publisher"
     void $ headerCell (fixedW versionW) HeaderStart "Version" Nothing False
@@ -358,11 +395,11 @@ columnHeaders frame@Frame {vars = Vars {..}, ..} =
     -- Clicking the sorted column flips its direction. Another column starts
     -- largest or newest first for sizes and dates, A to Z otherwise.
     sortable key sizing align title = do
-      let isCurrent = val sortKey == key
-      clicked <- headerCell sizing align title (if isCurrent then Just (val sortDesc) else Nothing) True
+      let isCurrent = snapSortKey == key
+      clicked <- headerCell sizing align title (if isCurrent then Just snapSortDesc else Nothing) True
       when clicked $
         if isCurrent
-          then put sortDesc (not (val sortDesc))
+          then put sortDesc (not snapSortDesc)
           else put sortKey key >> put sortDesc (key `elem` [SortSize, SortDate])
 
 --------------------------------------------------------------------------------
@@ -532,7 +569,7 @@ packageRow :: RowLook -> Package -> NanoUI [RowAction]
 packageRow RowLook {..} p =
   surface rowFill rowFill 0 (fillW . fixedH rowH . tight) $
     rowWith (fillW . fixedH rowH . gap 10 . alignMid . padXY 14 0 . tight) $ do
-      toggled <- rowWith (alignMid . tight) (checkbox "" rowSelected)
+      rowToggled <- checkboxWith' (alignMid . tight) "" (constVar rowSelected)
       nameCell
       textCell publisherW (ellipsize 24 (pkgPublisher p))
       versionCell
@@ -541,7 +578,7 @@ packageRow RowLook {..} p =
       actions <-
         rowWith (fixedW actionW . gap 4 . alignMid . alignEnd . tight) $
           if rowBusy then queued else buttons
-      pure ([RowToggle rowIndex toggled | toggled /= rowSelected] <> actions)
+      pure ([RowToggle rowIndex (not rowSelected) | respClicked rowToggled] <> actions)
   where
     rowFill
       | rowSelected && rowHovered = lerpColor (palAccentSoft palette) (palAccent palette) 0.08
@@ -579,19 +616,19 @@ packageRow RowLook {..} p =
 -- | Clicking a row's text, pressing and releasing on the same row, opens its
 -- details.
 trackRowClicks :: Frame -> NanoUI ()
-trackRowClicks frame@Frame {vars = Vars {..}, ..} = do
+trackRowClicks frame@Frame {vars = Vars {..}, snap = Snapshot {..}, ..} = do
   when (inputMousePressed inp) $ put pressedRow underMouse
   when (inputMouseReleased inp) $ do
-    when (isJust underMouse && underMouse == val pressedRow) $ put details underMouse
+    when (isJust underMouse && underMouse == snapPressedRow) $ put details underMouse
     put pressedRow Nothing
   where
     underMouse = rowTextUnder frame (inputMousePos inp)
 
 applyRowAction :: Frame -> RowAction -> NanoUI ()
-applyRowAction frame@Frame {vars = Vars {..}, ..} = \case
+applyRowAction frame@Frame {vars = Vars {..}, snap = Snapshot {..}, ..} = \case
   RowToggle i on -> do
     let pid = pkgId (visible V.! i)
-        anchorIx = val anchor >>= \a -> V.findIndex ((== a) . pkgId) visible
+        anchorIx = snapAnchor >>= \a -> V.findIndex ((== a) . pkgId) visible
         toggledIds = case anchorIx of
           -- Shift-click toggles the range from the last row toggled.
           Just a | modShift (inputModifiers inp) -> Set.fromList [pkgId (visible V.! j) | j <- [min a i .. max a i]]
@@ -696,7 +733,7 @@ isFailed = \case
 -- anything this frame.
 dialogFor :: Maybe s -> (s -> Text) -> NanoUI () -> (s -> NanoUI (Maybe c)) -> NanoUI (Maybe (s, c))
 dialogFor subject title close body = do
-  (resp, chosen) <- modal (isJust subject) (maybe "" title subject) $
+  (resp, chosen) <- modal' (constVar (isJust subject)) (maybe "" title subject) $
     forM subject $ \s -> fmap (s,) <$> body s
   when (respClicked resp) close
   pure (join (join chosen))
@@ -717,16 +754,16 @@ inset = spacer (Fixed 16) Fit
 data DetailAction = DetailCopyId | DetailOpenLocation | DetailUninstall | DetailUpgrade
 
 detailsDialog :: Frame -> NanoUI ()
-detailsDialog frame@Frame {vars = Vars {..}, ..} = do
+detailsDialog frame@Frame {vars = Vars {..}, snap = Snapshot {..}, ..} = do
   chosen <- dialogFor shown pkgName (put details Nothing) detailsBody
   forM_ chosen $ \(p, action) -> case action of
-    DetailCopyId -> uiIO (void (ctxClipboardSet ctx (pkgId p)))
+    DetailCopyId -> void (setClipboard (pkgId p))
     DetailOpenLocation -> void (attempt frame (spawnProcess "explorer.exe" [T.unpack (pkgLocation p)]))
     DetailUninstall -> put details Nothing >> askConfirm frame OpUninstall [p]
     DetailUpgrade -> put details Nothing >> askConfirm frame OpUpgrade [p]
   where
     -- Closes by itself if the app leaves the list.
-    shown = val details >>= \pid -> V.find ((== pid) . pkgId) (stPackages st)
+    shown = snapDetails >>= \pid -> V.find ((== pid) . pkgId) (stPackages st)
 
 detailsBody :: Package -> NanoUI (Maybe DetailAction)
 detailsBody p = columnWith (gap 12 . minW 720 . dialogBody) $ do
@@ -813,8 +850,8 @@ parallelism = [("1 (recommended)", 1), ("2", 2), ("4", 4)]
 data ConfirmChoice = ConfirmCancel | ConfirmRun
 
 confirmDialog :: Frame -> NanoUI ()
-confirmDialog frame@Frame {vars = Vars {..}, ..} = do
-  chosen <- dialogFor (val pending) batchTitle (put pending Nothing) (confirmBody frame)
+confirmDialog frame@Frame {vars = Vars {..}, snap = Snapshot {..}, ..} = do
+  chosen <- dialogFor snapPending batchTitle (put pending Nothing) (confirmBody frame)
   forM_ chosen $ \(batch, choice) -> do
     case choice of
       ConfirmCancel -> pure ()
@@ -823,12 +860,12 @@ confirmDialog frame@Frame {vars = Vars {..}, ..} = do
   where
     flags =
       OpFlags
-        { opSilent = val installerUi == InstallerSilent
-        , opInteractive = val installerUi == InstallerInteractive
-        , opForce = val force
-        , opAcceptAgreements = val acceptAgreements
+        { opSilent = snapInstallerUi == InstallerSilent
+        , opInteractive = snapInstallerUi == InstallerInteractive
+        , opForce = snapForce
+        , opAcceptAgreements = snapAcceptAgreements
         }
-    workers = snd (parallelism !! max 0 (min (length parallelism - 1) (val parallelIx)))
+    workers = snd (parallelism !! max 0 (min (length parallelism - 1) snapParallelIx))
 
 batchTitle :: PendingBatch -> Text
 batchTitle batch = opVerb (pbKind batch) <> " " <> countOf (length (pbPackages batch)) "app"
@@ -844,14 +881,14 @@ confirmBody Frame {vars = Vars {..}} batch =
     when (not upgrading && missingUninstaller > 0) $ uninstallWarning missingUninstaller
     columnWith (fillW . gap 12 . tight) $ do
       optionRow "Installer UI" $
-        enumMenu (fixedW 260) (enumLabels installerUiLabel) installerUi
+        enumMenu (fixedW 260) installerUiLabel installerUi
       optionRow "Run at once" $
-        bind parallelIx (selectWith (fixedW 260) (map fst parallelism))
+        selectWith (fixedW 260) (map fst parallelism) parallelIx
       optionRow "" $ columnWith (gap 4 . tight) $ do
-        bind force (checkbox "Force")
+        checkbox "Force" force
         labelWith (tight . fontSize 15 . inkColor palTextFaint) "Skip WinGet's safety checks, such as for apps that are still running."
       when upgrading $ optionRow "" $
-        bind acceptAgreements (checkbox "Accept package license agreements")
+        checkbox "Accept package license agreements" acceptAgreements
     separator
     rowWith (fillW . gap 8 . alignMid . tight) $ do
       flex
@@ -906,7 +943,7 @@ data RulesAction = RulesFile DialogPurpose | RulesAdd | RulesReplace
 
 -- | Rule-based selection, shared with winget-gui-cli --from FILE.
 rulesDialog :: Frame -> NanoUI ()
-rulesDialog frame@Frame {vars = Vars {..}, ..} = do
+rulesDialog frame@Frame {vars = Vars {..}, snap = Snapshot {..}, ..} = do
   chosen <- dialogFor matches (const "Select by rule") (put rulesOpen False) (rulesBody frame)
   forM_ chosen $ \(found, action) -> case action of
     RulesFile purpose -> askRulesFile frame purpose
@@ -915,7 +952,7 @@ rulesDialog frame@Frame {vars = Vars {..}, ..} = do
   where
     -- The apps the rules match, while the dialog is open.
     matches
-      | val rulesOpen = Just (selectPackages (parseSelectors (val rulesText)) (stPackages st))
+      | snapRulesOpen = Just (selectPackages (parseSelectors snapRulesText) (stPackages st))
       | otherwise = Nothing
     idsOf = Set.fromList . V.toList . V.map pkgId
     selectMatches f = setSelection frame f >> put rulesOpen False
@@ -930,7 +967,7 @@ rulesBody Frame {vars = Vars {..}} matches =
           <> [", or a bare id or name."]
       void . richTextWith (fillW . fontSize 15 . inkColor palTextFaint) $
         ["Lines starting with ", code "#", " are ignored. The same files work with ", code "winget-gui-cli --from", "."]
-    bind rulesText (textAreaWith (fillW . fixedH 240 . fontMono))
+    textAreaWith (fillW . fixedH 240 . fontMono) rulesText
     separator
     rowWith (fillW . gap 8 . alignMid . tight) $ do
       (load, save) <- styled quiet $ (,) <$> actionButton "Load file…" <*> actionButton "Save rules…"
@@ -951,14 +988,14 @@ rulesBody Frame {vars = Vars {..}} matches =
 -- 'pollRulesFile'.
 askRulesFile :: Frame -> DialogPurpose -> NanoUI ()
 askRulesFile Frame {..} purpose = do
-  asked <- case purpose of
+  did <- case purpose of
     LoadRules -> askOpenFileDialog defaultFileDialogOptions
     SaveRules -> askSaveFileDialog defaultFileDialogOptions
-  forM_ asked $ \did -> uiIO (writeIORef (vcDialog cache) (Just (purpose, did)))
+  uiIO (writeIORef (vcDialog cache) (Just (purpose, did)))
 
 -- | Load or save the rules once the file dialog has been answered.
 pollRulesFile :: Frame -> NanoUI ()
-pollRulesFile frame@Frame {vars = Vars {..}, ..} = do
+pollRulesFile frame@Frame {vars = Vars {..}, snap = Snapshot {..}, ..} = do
   asked <- uiIO (readIORef (vcDialog cache))
   forM_ asked $ \(purpose, did) ->
     pollFileDialogUi did >>= \case
@@ -974,8 +1011,8 @@ pollRulesFile frame@Frame {vars = Vars {..}, ..} = do
       when (isJust saved) $ put notice (Just ("Saved " <> T.pack path))
     -- The typed rules, or the current selection as exact ids.
     rulesToSave
-      | T.null (T.strip (val rulesText)) = T.unlines (map (renderSelector . ById . pkgId) selectedPackages)
-      | otherwise = val rulesText
+      | T.null (T.strip snapRulesText) = T.unlines (map (renderSelector . ById . pkgId) selectedPackages)
+      | otherwise = snapRulesText
 
 --------------------------------------------------------------------------------
 -- Keyboard
@@ -1102,8 +1139,12 @@ enumLabels :: (Enum a, Bounded a) => (a -> Text) -> [Text]
 enumLabels labelOf = map labelOf [minBound .. maxBound]
 
 -- | A drop-down over an enumeration, its options in 'fromEnum' order.
-enumMenu :: Enum a => (Layout -> Layout) -> [Text] -> Var a -> NanoUI ()
-enumMenu sizing options v = bind v (fmap toEnum . selectWith sizing options . fromEnum)
+enumMenu :: (Enum a, Bounded a, Eq a) => (Layout -> Layout) -> (a -> Text) -> Var a -> NanoUI ()
+enumMenu sizing labelOf v = do
+  cur <- readVar v
+  let options = enumLabels labelOf
+  (_, newIdx) <- withValue (fromEnum cur) (selectWith sizing options)
+  when (newIdx /= fromEnum cur) (writeVar v (toEnum newIdx))
 
 -- | A button shown only when a condition holds; a hidden one is never clicked.
 shownIf :: Bool -> NanoUI Bool -> NanoUI Bool

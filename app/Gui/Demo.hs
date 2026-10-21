@@ -29,7 +29,8 @@ import Foreign.Storable (pokeByteOff)
 import Gui.SelfTest (Headless (..), headless, uiSpans, waitForList)
 import Gui.State
 import Gui.View (ViewCache)
-import NanoUI (Input (..), Key (..), Rect (..), V2 (..), inputKeysFromList)
+import NanoUI (Input (..), Key (..), Rect (..), V2 (..))
+import NanoUI.Backend (MouseButton (..), applyMouseButton, buttonsFromList, inputKeysFromList)
 import NanoUI.Backend.Sdl (SdlOptions (..), saveScreenshot)
 import System.Exit (ExitCode, exitFailure, exitSuccess)
 import System.IO (IOMode (..), hPutBuf, hPutStrLn, stderr, withBinaryFile)
@@ -209,15 +210,17 @@ moveToText r match secs = do
 
 click :: Rec -> IO ()
 click r = do
-  shoot r (\i -> i {inputMouseDown = True, inputMousePressed = True})
-  replicateM_ 2 (shoot r (\i -> i {inputMouseDown = True}))
-  shoot r (\i -> i {inputMouseReleased = True})
+  shoot r (applyMouseButton MouseLeft True)
+  replicateM_ 2 (shoot r (\i -> i {inputButtonsHeld = buttonsFromList [MouseLeft]}))
+  shoot r (applyMouseButton MouseLeft False)
 
 wheel :: Rec -> Float -> IO ()
 wheel r notches = shoot r (\i -> i {inputScroll = V2 0 notches})
 
 key :: Rec -> Key -> IO ()
-key r k = shoot r (\i -> i {inputKeys = inputKeysFromList [k]})
+key r k =
+  let ks = inputKeysFromList [k]
+   in shoot r (\i -> i {inputKeys = ks, inputKeysNew = ks})
 
 -- | About twelve characters a second.
 typeText :: Rec -> Text -> IO ()
