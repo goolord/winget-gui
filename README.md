@@ -2,7 +2,7 @@
 
 A fast replacement for Windows' **Settings → Apps → Installed apps** ("Add or remove programs"), built on [nano-ui](https://github.com/goolord/nano-ui) and the [WinGet](https://github.com/microsoft/winget-cli) COM API, with bulk and automated uninstallation.
 
-[![winget-gui preview](https://files.catbox.moe/tmj3ao.png)](https://files.catbox.moe/jni2mj.mp4)
+https://github.com/user-attachments/assets/bdc2e82c-3d45-41df-ab98-6792e3835bcb
 
 - **Fast**: Multi-threaded catalog reads, background upgrade checks, and virtualized list rendering.
 - **Bulk operations**: Select multiple apps to uninstall or upgrade in parallel or sequentially, with a live controllable queue.
